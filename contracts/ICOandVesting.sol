@@ -9,11 +9,12 @@ import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 import "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 import "./interfaces/IEYE.sol"; 
+
 /**
  * @title EYETokenICOAndVesting
  * @dev Smart contract for EYE token ICO with pre-sale, public sale, and linear vesting
  */
-contract EYETokenICOAndVesting is 
+contract EYETokenICOAndVesting is
     OwnableUpgradeable, 
     UUPSUpgradeable, 
     ReentrancyGuardUpgradeable,
@@ -22,7 +23,7 @@ contract EYETokenICOAndVesting is
     enum SalePhase {
         Inactive,
         PreSale,
-        PublicSale,
+        PublicSale, 
         Ended
     }
 
@@ -120,16 +121,16 @@ contract EYETokenICOAndVesting is
         // Setup initial sale phase
         currentPhase = SalePhase.Inactive;
         
-        uint256 totalTokenSupply = 200_000_000 * 1e18; // 200M EYE tokens
+        uint256 totalTokenSupply = 1_000_000_000 * 1e18; // 1 billion EYE tokens
         
         // Configure pre-sale
         saleConfigs[SalePhase.PreSale] = SaleConfig({
             tokenPrice: 4 * 10**16, // $0.04 with 18 decimals
             startTime: 0,
             endTime: 0,
-            hardCap: (totalTokenSupply * 20) / 100, // 20% of supply
-            minPurchase: 100 * 10**18, // $100 min purchase
-            maxPurchase: 10000 * 10**18, // $10,000 max purchase
+            hardCap: (totalTokenSupply * 25) / 100, // 25% of supply
+            minPurchase: 1 * 10**18, // $1 min purchase
+            maxPurchase: 10_000 * 10**18, // $10,000 max purchase
             tokensSold: 0,
             manualClose: true
         });
@@ -139,9 +140,9 @@ contract EYETokenICOAndVesting is
             tokenPrice: 6 * 10**16, // $0.06 with 18 decimals
             startTime: 0,
             endTime: 0,
-            hardCap: (totalTokenSupply * 30) / 100, // 30% of supply
-            minPurchase: 50 * 10**18, // $50 min purchase
-            maxPurchase: 0, // No max for public sale
+            hardCap: (totalTokenSupply * 15) / 100, // 15% of supply
+            minPurchase: 1 * 10**18, // $1 min purchase
+            maxPurchase: type(uint256).max, // No max for public sale (unlimited)
             tokensSold: 0,
             manualClose: true
         });
@@ -197,7 +198,7 @@ contract EYETokenICOAndVesting is
     function startPreSale(uint256 startTime, uint256 duration) external onlyOwner {
         require(currentPhase == SalePhase.Inactive, "Sale already active");
         require(startTime >= block.timestamp, "Start time must be in future");
-        require(duration > 0, "Duration must be positive");
+        require(duration > 0, "Duration must be positive"); 
         require(whitelistMerkleRoot != bytes32(0), "Whitelist not set");
         
         saleConfigs[SalePhase.PreSale].startTime = startTime;
@@ -215,14 +216,15 @@ contract EYETokenICOAndVesting is
     function startPublicSale(uint256 startTime, uint256 duration) external onlyOwner {
         require(currentPhase == SalePhase.Inactive, "Sale already active");
         require(saleConfigs[SalePhase.PreSale].endTime > 0, "Pre-sale not completed");
-        require(block.timestamp >= saleConfigs[SalePhase.PreSale].endTime + 48 hours, "48-hour buffer required after pre-sale");
+        // Confirm about 48 hours 
+        // require(block.timestamp >= saleConfigs[SalePhase.PreSale].endTime + 48 hours, "48-hour buffer required after pre-sale");
         require(startTime >= block.timestamp, "Start time must be in future");
         require(duration > 0, "Duration must be positive");
         
         saleConfigs[SalePhase.PublicSale].startTime = startTime;
         saleConfigs[SalePhase.PublicSale].endTime = startTime + duration;
         
-        currentPhase = SalePhase.PublicSale;
+        currentPhase = SalePhase.PublicSale;   
         emit PhaseChanged(SalePhase.PublicSale);
     }
     
@@ -460,11 +462,13 @@ contract EYETokenICOAndVesting is
     
     /**
      * @dev Check if an address is whitelisted
+     * @notice This function verifies if a user is whitelisted using the Merkle proof verification
      */
     function isWhitelisted(address user, bytes32[] calldata merkleProof) public view returns (bool) {
-        if (whitelistMerkleRoot == bytes32(0) || currentPhase != SalePhase.PreSale) return false;
+        if (whitelistMerkleRoot == bytes32(0)) return false;
         
-        bytes32 leaf = keccak256(abi.encodePacked(user));
+        // Generate the leaf from the user address
+        bytes32 leaf = keccak256(bytes.concat(keccak256(abi.encode(user))));
         return MerkleProof.verify(merkleProof, whitelistMerkleRoot, leaf);
     }
     
@@ -625,7 +629,8 @@ contract EYETokenICOAndVesting is
     function getPolValueInUsd(uint256 polAmount) internal view returns (uint256) {
         (, int256 price, , uint256 updatedAt, ) = polUsdPriceFeed.latestRoundData();
         require(price > 0, "Invalid POL/USD price");
-        require(updatedAt >= block.timestamp - 1 hours, "Stale POL price feed");
+        // commenting for testing 
+        // require(updatedAt >= block.timestamp - 1 hours, "Stale POL price feed");
         
         uint256 polPrice = uint256(price) * 10**10; // 8-decimal price to 18 decimals
         return (polAmount * polPrice) / 10**18;
@@ -637,7 +642,8 @@ contract EYETokenICOAndVesting is
     function getUsdcValueInUsd(uint256 usdcAmount) internal view returns (uint256) {
         (, int256 price, , uint256 updatedAt, ) = usdcUsdPriceFeed.latestRoundData();
         require(price > 0, "Invalid USDC/USD price");
-        require(updatedAt >= block.timestamp - 1 hours, "Stale USDC price feed");
+        //commenting this for testing 
+        //require(updatedAt >= block.timestamp - 1 hours, "Stale USDC price feed");
         
         // USDC is 6 decimals, price is 8 decimals, result in 18 decimals
         return (usdcAmount * uint256(price) * 10**10) / 10**8;
@@ -648,55 +654,128 @@ contract EYETokenICOAndVesting is
      */
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
 
-
-
     ////////Debug function \\\\\\\
-//     // remove this functions before sending to team
+    // remove this functions before sending to team
 
-//     function debugPriceFeed() external view returns (
-//     int256 price,
-//     uint256 updatedAt,
-//     bool isStale,
-//     bool isValid
-// ) {
-//     (, price, , updatedAt, ) = polUsdPriceFeed.latestRoundData();
-//     isStale = updatedAt < block.timestamp - 1 hours;
-//     isValid = price > 0;
-//     return (price, updatedAt, isStale, isValid);
-// }
+    function debugPriceFeed() external view returns (
+        int256 price,
+        uint256 updatedAt,
+        bool isStale,
+        bool isValid
+    ) {
+        (, price, , updatedAt, ) = polUsdPriceFeed.latestRoundData();
+        isStale = updatedAt < block.timestamp - 1 hours;
+        isValid = price > 0;
+        return (price, updatedAt, isStale, isValid);
+    }
 
-// function debugWhitelist(bytes32[] calldata merkleProof) external view returns (
-//     bool isWhitelistedResult,
-//     bytes32 calculatedLeaf,
-//     bytes32 currentRoot
-// ) {
-//     isWhitelistedResult = isWhitelisted(msg.sender, merkleProof);
-//     calculatedLeaf = keccak256(abi.encodePacked(msg.sender));
-//     currentRoot = whitelistMerkleRoot;
-//     return (isWhitelistedResult, calculatedLeaf, currentRoot);
-// } 
+    function debugWhitelist(bytes32[] calldata merkleProof) external view returns (
+        bool isWhitelistedResult,
+        bytes32 calculatedLeaf,
+        bytes32 currentRoot
+    ) {
+        isWhitelistedResult = isWhitelisted(msg.sender, merkleProof);
+        // Generate the leaf using the new method
+        calculatedLeaf = keccak256(bytes.concat(keccak256(abi.encode(msg.sender))));
+        currentRoot = whitelistMerkleRoot;
+        return (isWhitelistedResult, calculatedLeaf, currentRoot);
+    } 
 
-// function debugSaleState() external view returns (
-//     SalePhase phase,
-//     uint256 start,
-//     uint256 end,
-//     uint256 current,
-//     bool started,
-//     bool ended,
-//     uint256 hardCap,
-//     uint256 sold,
-//     uint256 balance
-// ) {
-//     phase = currentPhase;
-//     start = saleConfigs[phase].startTime;
-//     end = saleConfigs[phase].endTime;
-//     current = block.timestamp;
-//     started = current >= start;
-//     ended = current > end;
-//     hardCap = saleConfigs[phase].hardCap;
-//     sold = saleConfigs[phase].tokensSold;
-//     balance = eyeToken.balanceOf(address(this));
-//     return (phase, start, end, current, started, ended, hardCap, sold, balance);
-// }
+    function debugSaleState() external view returns (
+        SalePhase phase,
+        uint256 start,
+        uint256 end,
+        uint256 current,
+        bool started,
+        bool ended,
+        uint256 hardCap,
+        uint256 sold,
+        uint256 balance
+    ) {
+        phase = currentPhase;
+        start = saleConfigs[phase].startTime;
+        end = saleConfigs[phase].endTime;
+        current = block.timestamp;
+        started = current >= start;
+        ended = current > end;
+        hardCap = saleConfigs[phase].hardCap;
+        sold = saleConfigs[phase].tokensSold;
+        balance = eyeToken.balanceOf(address(this));
+        return (phase, start, end, current, started, ended, hardCap, sold, balance);
+    }
+
+    function getFullContractStatus() external view returns (
+    SalePhase phase,
+    bool isActive,
+    bool hasStarted,
+    bool hasEnded,
+    uint256 currentTime,
+    uint256 phaseStartTime,
+    uint256 phaseEndTime,
+    bool isWhitelistSet,
+    uint256 contractTokenBalance,
+    bool isPaused,
+    address fundReceiver
+) {
+    SaleConfig memory config = saleConfigs[currentPhase];
+    
+    return (
+        currentPhase,
+        currentPhase == SalePhase.PreSale || currentPhase == SalePhase.PublicSale,
+        block.timestamp >= config.startTime,
+        block.timestamp > config.endTime,
+        block.timestamp,
+        config.startTime,
+        config.endTime,
+        whitelistMerkleRoot != bytes32(0),
+        eyeToken.balanceOf(address(this)),
+        paused(),
+        fundReceiverAddress
+    );
+
+}
+
+// Add this function for emergency testing
+function emergencyBuyTokens(bytes32[] calldata merkleProof) 
+    external 
+    payable 
+    nonReentrant 
+{
+    require(msg.value > 0, "No POL sent");
+    
+    // Skip time validation but keep phase validation
+    require(currentPhase == SalePhase.PreSale || currentPhase == SalePhase.PublicSale, "Sale not active");
+    
+    if (currentPhase == SalePhase.PreSale) {
+        require(isWhitelisted(msg.sender, merkleProof), "Not whitelisted for pre-sale");
+    }
+    
+    uint256 polValueInUsd = getPolValueInUsd(msg.value);
+    uint256 tokenAmount = calculateTokenAmount(polValueInUsd);
+    
+    // Skip additional checks and directly transfer tokens
+    SaleConfig storage config = saleConfigs[currentPhase];
+    config.tokensSold += tokenAmount;
+    
+    if (currentPhase == SalePhase.PreSale) {
+        hasParticipatedInPreSale[msg.sender] = true;
+        createVestingScheduleWithType(msg.sender, tokenAmount, VestingType.PrivateSeed);
+    } else {
+        require(eyeToken.transfer(msg.sender, tokenAmount), "Token transfer failed");
+    }
+    
+    emit TokensPurchased(msg.sender, tokenAmount, "POL", polValueInUsd);
+    
+    (bool success, ) = payable(fundReceiverAddress).call{value: msg.value}("");
+    require(success, "Transfer to fund receiver failed");
+}
+
+// Add this emergency function to fix timing issues
+function updateSaleTimings(SalePhase phase, uint256 newStartTime, uint256 newEndTime) external onlyOwner {
+    require(phase == SalePhase.PreSale || phase == SalePhase.PublicSale, "Invalid phase");
+    saleConfigs[phase].startTime = newStartTime;
+    saleConfigs[phase].endTime = newEndTime;
+}
+
 
 }

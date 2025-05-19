@@ -1,460 +1,807 @@
 const { expect } = require("chai");
-const { ethers, upgrades } = require("hardhat");
-const { StandardMerkleTree } = require("@openzeppelin/merkle-tree");
+const { ethers, upgrades, network } = require("hardhat");
+const { time } = require("@nomicfoundation/hardhat-network-helpers");
+const { MerkleTree } = require("merkletreejs");
+const keccak256 = require("keccak256");
 
-describe("EYETokenICOAndVesting", function () {
-  let EYE, ICO, MockUSDC, PolPriceFeed, UsdcPriceFeed;
-  let owner, fundReceiver, user1, user2, user3;
-  let merkleTreeInstance, merkleRootHash;
+let eyeTokenAddress,
+  mockUSDCAddress,
+  polUsdPriceFeedAddress,
+  usdcUsdPriceFeedAddress,
+  fundReceiverAddress,
+  icoAndVestingAddress; 
+
   
-  // Constants
-  const TOTAL_SUPPLY = "1000000000000000000000000000"; // 1B EYE in wei
-  const PRE_SALE_PRICE = "40000000000000000"; // 0.04 in wei
-  const PUBLIC_SALE_PRICE = "60000000000000000"; // 0.06 in wei
-  const POL_PRICE = 0.5 * 1e8; // $0.5 per POL (8 decimals)
-  const USDC_PRICE = 1 * 1e8; // $1 per USDC (8 decimals)
-  const TOKENS_FOR_ICO = "200000000000000000000000000"; // 200M EYE in wei
-  
-  before(async function() {
+describe("EYETokenICOAndVesting Contract Tests", function () {
+  let owner, user1, user2, user3, fundReceiver;
+  let EYE, MockUSDC, EYETokenICOAndVesting;
+  let eyeToken, mockUSDC, icoAndVesting;
+  let polUsdPriceFeed, usdcUsdPriceFeed;
+  let merkleTree;
+  let whitelistedAddresses;
+
+  const ONE_ETH = ethers.parseEther("1.0");
+  const ONE_USDC = ethers.parseUnits("1.0", 6); // USDC uses 6 decimals
+  const ONE_DAY = 86400;
+  const PRIVATE_SEED_DURATION = 900; // Matches contract's PRIVATE_SEED_DURATION
+
+  // Helper function to get merkle proof for an address
+  function getProof(address) {
+    const abiCoder = new ethers.AbiCoder();
+    const encodedAddress = abiCoder.encode(["address"], [address]);
+    const innerHash = ethers.keccak256(encodedAddress);
+    const leaf = keccak256(innerHash); // Match contract's leaf generation
+    return merkleTree.getHexProof(leaf);
+  }
+
+  before(async function () {
     // Get signers
-    [owner, fundReceiver, user1, user2, user3] = await ethers.getSigners();
-    
-    try {
-      // Whitelist addresses are now set up in the main scope
+    [owner, user1, user2, user3, fundReceiver] = await ethers.getSigners();
 
-      // Deploy mock price feeds
-      const MockV3Aggregator = await ethers.getContractFactory("MockV3Aggregator");
-      PolPriceFeed = await MockV3Aggregator.deploy(8, POL_PRICE);
-      UsdcPriceFeed = await MockV3Aggregator.deploy(8, USDC_PRICE);
-      
-      // Deploy MockUSDC
-      const MockUSDCContract = await ethers.getContractFactory("MockUSDC");
-      MockUSDC = await MockUSDCContract.deploy();
-      await MockUSDC.mint(user1.address, ethers.parseUnits("10000", 6)); // 10k USDC
-      await MockUSDC.mint(user2.address, ethers.parseUnits("10000", 6));
-      
-      // Deploy EYE token
-      const EYEToken = await ethers.getContractFactory("EYE");
-      EYE = await EYEToken.deploy(fundReceiver.address);
-      
-      // Deploy ICO contract
-      const ICOContract = await ethers.getContractFactory("EYETokenICOAndVesting");
-      ICO = await upgrades.deployProxy(ICOContract, [
-        await EYE.getAddress(),
-        await fundReceiver.getAddress(),
-        await MockUSDC.getAddress(),
-        await PolPriceFeed.getAddress(),
-        await UsdcPriceFeed.getAddress()
-      ]);
-      
-      // Transfer tokens to ICO contract
-      await EYE.connect(fundReceiver).transfer(await ICO.getAddress(), TOKENS_FOR_ICO);
-      
-      console.log("All contracts deployed and initialized successfully");
+    console.log("Setting up test environment...");
+
+    // Use addresses from merkle.js to match provided Merkle root
+    whitelistedAddresses = [
+      "0xfE98c32B4F998eAf7850E18FA6afBbD665C45E39",
+      "0xCc5e4E757E151aDA1F62EC9C82EB65efB95ef86c",
+      "0x9E32B3e2C55bd16422cdE109C6591e2960E7ABcF",
+    ];
+
+    // Create merkle tree for whitelist
+    const leaves = whitelistedAddresses.map((addr) => {
+      const abiCoder = new ethers.AbiCoder();
+      const encodedAddress = abiCoder.encode(["address"], [addr]);
+      const innerHash = ethers.keccak256(encodedAddress);
+      return keccak256(innerHash); // Match contract's leaf generation
+    });
+
+    merkleTree = new MerkleTree(leaves, keccak256, { sortPairs: true });
+    const rootHash = merkleTree.getRoot().toString("hex");
+    merkleRoot = "0x" + rootHash;
+
+    console.log("Generated Merkle Root:", merkleRoot);
+    // Verify the Merkle root matches the provided one
+    expect(merkleRoot).to.equal("0x00b38484ea23e501a74be97409e696a205b6acfd7857c17e73d677b8ca8b0844");
+
+    // Deploy mock price feeds
+    const MockV3Aggregator = await ethers.getContractFactory("MockV3Aggregator");
+    polUsdPriceFeed = await MockV3Aggregator.deploy(8, 4 * 10 ** 8); // $4 per POL with 8 decimals
+    await polUsdPriceFeed.waitForDeployment(); // Ensure deployment completes
+    polUsdPriceFeedAddress = await polUsdPriceFeed.getAddress();
+    console.log("polUsdPriceFeed deployed at:", polUsdPriceFeedAddress);
+
+    usdcUsdPriceFeed = await MockV3Aggregator.deploy(8, 1 * 10 ** 8); // $1 per USDC with 8 decimals
+    await usdcUsdPriceFeed.waitForDeployment(); // Ensure deployment completes
+    usdcUsdPriceFeedAddress = await usdcUsdPriceFeed.getAddress();
+    console.log("usdcUsdPriceFeed deployed at:", usdcUsdPriceFeedAddress);
+
+    // Deploy contracts
+    const EYEFactory = await ethers.getContractFactory("EYE");
+    eyeToken = await EYEFactory.deploy(fundReceiver.address);
+    await eyeToken.waitForDeployment(); // Ensure deployment completes
+    eyeTokenAddress = await eyeToken.getAddress();
+    console.log("EYE deployed at:", eyeTokenAddress);
+
+    const MockUSDCFactory = await ethers.getContractFactory("MockUSDC");
+    mockUSDC = await MockUSDCFactory.deploy();
+    await mockUSDC.waitForDeployment(); // Ensure deployment completes
+    mockUSDCAddress = await mockUSDC.getAddress();
+    console.log("MockUSDC deployed at:", mockUSDCAddress);
+
+    // Validate fundReceiver address
+    fundReceiverAddress = fundReceiver.address;
+    console.log("fundReceiver address:", fundReceiverAddress);
+    if (!fundReceiverAddress || fundReceiverAddress === ethers.ZeroAddress) {
+      throw new Error("Invalid fundReceiver address");
+    }
+
+    // Deploy proxy manager and implementation
+    const EYETokenICOAndVestingFactory = await ethers.getContractFactory("EYETokenICOAndVesting");
+    try {
+      icoAndVesting = await upgrades.deployProxy(
+        EYETokenICOAndVestingFactory,
+        [
+          eyeTokenAddress,
+          fundReceiverAddress,
+          mockUSDCAddress,
+          polUsdPriceFeedAddress,
+          usdcUsdPriceFeedAddress,
+        ],
+        { kind: "uups", initializer: "initialize" }
+      );
+      await icoAndVesting.waitForDeployment(); // Ensure deployment completes
+      icoAndVestingAddress = await icoAndVesting.getAddress();
+      console.log("EYETokenICOAndVesting deployed at:", icoAndVestingAddress);
     } catch (error) {
-      console.error("Error in before hook:", error);
+      console.error("Error deploying EYETokenICOAndVesting:", error);
       throw error;
     }
+
+    // Transfer EYE tokens to ICO contract
+    try {
+      console.log("Transferring 200M EYE tokens to ICO contract:", icoAndVestingAddress);
+      await eyeToken.connect(fundReceiver).transfer(icoAndVestingAddress, ethers.parseEther("200000000")); // 200M tokens
+      console.log("EYE token transfer successful");
+    } catch (error) {
+      console.error("Error transferring EYE tokens:", error);
+      throw error;
+    }
+
+    // Mint USDC for test users
+    try {
+      console.log("Minting USDC for test users...");
+      await mockUSDC.mint(user1.address, ethers.parseUnits("10000", 6)); // 10k USDC
+      await mockUSDC.mint(user2.address, ethers.parseUnits("20000", 6)); // 20k USDC
+      await mockUSDC.mint(user3.address, ethers.parseUnits("10000", 6)); // 10k USDC
+      console.log("USDC minting successful");
+    } catch (error) {
+      console.error("Error minting USDC:", error);
+      throw error;
+    }
+
+    // Set up whitelist
+    try {
+      console.log("Setting whitelist Merkle root:", merkleRoot);
+      await icoAndVesting.setWhitelistMerkleRoot(merkleRoot);
+      console.log("Whitelist Merkle root set successfully");
+    } catch (error) {
+      console.error("Error setting whitelist Merkle root:", error);
+      throw error;
+    }
+
+    console.log("Test environment setup complete");
+
+    it("Should have the correct token balance", async function () {
+      const balance = await eyeToken.balanceOf(icoAndVestingAddress); 
+      console.log("ICO Contract token balance:", ethers.formatEther(balance));
+      expect(balance).to.equal(ethers.parseEther("200000000"));
+    });
   });
 
-  // Helper function to get future timestamp
-  const getFutureTimestamp = async (secondsFromNow = 60) => {
-    const block = await ethers.provider.getBlock('latest');
-    return block.timestamp + BigInt(secondsFromNow);
-  };
-  
-  // Helper function to get merkle proof for an address
-  let getMerkleProof;
-  
-  // Initialize WhitelistMerkleTree after signers are set up
-  before(async function() {
-    // Whitelist data with test addresses
-    const whitelistData = [
-      { address: user1.address },
-      { address: user2.address },
-      { address: user3.address },
-      { address: owner.address }
-    ];
-    
-    // Create merkle tree
-    const values = whitelistData.map(x => [x.address]);
-    merkleTreeInstance = StandardMerkleTree.of(values, ["address"]);
-    merkleRootHash = merkleTreeInstance.root;
-    
-    // Initialize the getMerkleProof function
-    getMerkleProof = (address) => {
-      const leafIndex = merkleTreeInstance.leafLookup([address]);
-      if (leafIndex === -1) return [];
-      return merkleTreeInstance.getProof(leafIndex);
-    };
+  describe("Sale Configuration", function () {
+    it("Should configure pre-sale phase correctly", async function () {
+      console.log("Configuring pre-sale phase...");
+
+      await icoAndVesting.configureSalePhase(
+        1, // SalePhase.PreSale
+        ethers.parseEther("0.04"), // $0.04 per token
+        ONE_DAY * 7, // 7 days duration
+        ethers.parseEther("50000000"), // 50M tokens
+        ethers.parseEther("1"), // $1 min purchase
+        ethers.parseEther("10000") // $10k max purchase
+      );
+
+      const preSaleConfig = await icoAndVesting.saleConfigs(1);
+      expect(preSaleConfig.tokenPrice).to.equal(ethers.parseEther("0.04"));
+      expect(preSaleConfig.hardCap).to.equal(ethers.parseEther("50000000"));
+
+      console.log("Pre-sale configuration successful");
+    });
+
+    it("Should configure public sale phase correctly", async function () {
+      console.log("Configuring public sale phase...");
+
+      await icoAndVesting.configureSalePhase(
+        2, // SalePhase.PublicSale
+        ethers.parseEther("0.06"), // $0.06 per token
+        ONE_DAY * 14, // 14 days duration
+        ethers.parseEther("30000000"), // 30M tokens
+        ethers.parseEther("1"), // $1 min purchase
+        ethers.MaxUint256 // No max purchase limit
+      );
+
+      const publicSaleConfig = await icoAndVesting.saleConfigs(2);
+      expect(publicSaleConfig.tokenPrice).to.equal(ethers.parseEther("0.06"));
+      expect(publicSaleConfig.hardCap).to.equal(ethers.parseEther("30000000"));
+
+      console.log("Public sale configuration successful");
+    });
   });
-  
-  // Helper function to convert number to BigInt
-  const toBigInt = (value) => {
-    return typeof value === 'bigint' ? value : BigInt(value);
-  };
+
+  describe("Whitelist Functionality", function () {
+    it("Should correctly identify whitelisted addresses", async function () {
+      console.log("Verifying whitelist functionality...");
+
+      const user1Proof = getProof(whitelistedAddresses[0]); // 0xfE98c32B...
+      const user2Proof = getProof(whitelistedAddresses[1]); // 0xCc5e4E75...
+      const user3Proof = getProof(user3.address);
+
+      // User1 and User2 should be whitelisted
+      expect(await icoAndVesting.isWhitelisted(whitelistedAddresses[0], user1Proof)).to.be.true;
+      expect(await icoAndVesting.isWhitelisted(whitelistedAddresses[1], user2Proof)).to.be.true;
+
+      // User3 should not be whitelisted
+      expect(await icoAndVesting.isWhitelisted(user3.address, user3Proof)).to.be.false;
+
+      console.log("Whitelist verification passed");
+    });
+  });
+
+  describe("Pre-sale Phase", function () {
+    it("Should start the pre-sale phase", async function () {
+      console.log("Starting pre-sale phase...");
+
+      const startTime = (await ethers.provider.getBlock("latest")).timestamp + 100;
+      const duration = ONE_DAY * 7; // 7 days
+
+      await icoAndVesting.startPreSale(startTime, duration);
+
+      expect(await icoAndVesting.currentPhase()).to.equal(1); // SalePhase.PreSale
+
+      const preSaleConfig = await icoAndVesting.saleConfigs(1);
+      expect(preSaleConfig.startTime).to.equal(startTime);
+      expect(preSaleConfig.endTime).to.equal(startTime + duration);
+
+      console.log("Pre-sale started successfully");
+
+      // Move time forward to start the pre-sale
+      await time.increaseTo(startTime + 1);
+      console.log("Moved time forward to pre-sale start");
+    });
+
+    it("Should allow whitelisted users to buy tokens with POL during pre-sale", async function () {
+      console.log("Testing token purchase with POL in pre-sale...");
+
+      const initialFundReceiverBalance = await ethers.provider.getBalance(fundReceiver.address);
+      const user1Proof = getProof(whitelistedAddresses[0]);
+
+      const amountToSend = ethers.parseEther("1"); // 1 POL
+
+      // Calculate expected tokens (1 POL = $4, token price = $0.04)
+      // So 1 POL should buy 4/0.04 = 100 tokens
+      const expectedTokens = ethers.parseEther("100");
+
+      // Impersonate whitelisted address for testing
+await network.provider.request({
+  method: "hardhat_impersonateAccount",
+  params: [whitelistedAddresses[0]],
+});
+const whitelistedUser1 = await ethers.getSigner(whitelistedAddresses[0]);
+
+// Fund the impersonated account with ETH
+await owner.sendTransaction({
+  to: whitelistedAddresses[0],
+  value: ethers.parseEther("2"), // Send 2 ETH to cover gas and 1 POL purchase
+});
+
+const tx = await icoAndVesting.connect(whitelistedUser1).buyTokensWithPOL(user1Proof, {
+  value: amountToSend,
+});
+      // Stop impersonating
+      await network.provider.request({
+        method: "hardhat_stopImpersonatingAccount",
+        params: [whitelistedAddresses[0]],
+      });
+
+      // Check if purchase was successful
+      const receipt = await tx.wait();
+      const purchaseEvent = receipt.logs
+        .map((log) => {
+          try {
+            return icoAndVesting.interface.parseLog(log);
+          } catch {
+            return null;
+          }
+        })
+        .find((e) => e && e.name === "TokensPurchased");
+
+      expect(purchaseEvent).to.not.be.undefined;
+      expect(purchaseEvent.args.buyer).to.equal(whitelistedAddresses[0]);
+      expect(purchaseEvent.args.paymentMethod).to.equal("POL");
+
+      // Check if funds were transferred to fundReceiver
+      const newFundReceiverBalance = await ethers.provider.getBalance(fundReceiver.address);
+      expect(ethers.toBigInt(newFundReceiverBalance) - ethers.toBigInt(initialFundReceiverBalance)).to.equal(ethers.toBigInt(amountToSend));
+
+      // Check vesting schedule (pre-sale tokens should be vested)
+      const vestingDetails = await icoAndVesting.getVestingDetails(whitelistedAddresses[0]);
+      expect(vestingDetails.totalAmount).to.equal(expectedTokens);
+      expect(vestingDetails.vestingType).to.equal(1); // VestingType.PrivateSeed
+
+      console.log("Pre-sale POL purchase successful");
+    });
+
+    it("Should allow whitelisted users to buy tokens with USDC during pre-sale", async function () {
+      console.log("Testing token purchase with USDC in pre-sale...");
+
+const user2Proof = getProof(whitelistedAddresses[1]);
+const usdcAmount = ethers.parseUnits("200", 6); // 200 USDC
+
+// Calculate expected tokens (200 USDC = $200, token price = $0.04)
+// So 200 USDC should buy 200/0.04 = 5000 tokens
+const expectedTokens = ethers.parseEther("5000");
+
+// Impersonate whitelisted address for testing
+await network.provider.request({
+  method: "hardhat_impersonateAccount",
+  params: [whitelistedAddresses[1]],
+});
+const whitelistedUser2 = await ethers.getSigner(whitelistedAddresses[1]);
+
+// Fund the impersonated account with ETH
+await owner.sendTransaction({
+  to: whitelistedAddresses[1],
+  value: ethers.parseEther("1"), // Send 1 ETH for gas
+});
+
+// Mint USDC to whitelisted address
+await mockUSDC.mint(whitelistedAddresses[1], usdcAmount);
+
+await mockUSDC.connect(whitelistedUser2).approve(icoAndVestingAddress, usdcAmount);
+const tx = await icoAndVesting.connect(whitelistedUser2).buyTokensWithUSDC(usdcAmount, user2Proof); 
+// Stop impersonating
+      await network.provider.request({
+        method: "hardhat_stopImpersonatingAccount",
+        params: [whitelistedAddresses[1]],
+      });
+
+      // Check if purchase was successful
+      const receipt = await tx.wait();
+      const purchaseEvent = receipt.logs
+        .map((log) => {
+          try {
+            return icoAndVesting.interface.parseLog(log);
+          } catch {
+            return null;
+          }
+        })
+        .find((e) => e && e.name === "TokensPurchased");
+
+      expect(purchaseEvent).to.not.be.undefined;
+      expect(purchaseEvent.args.buyer).to.equal(whitelistedAddresses[1]);
+      expect(purchaseEvent.args.paymentMethod).to.equal("USDC");
+
+      // Check if USDC was transferred to fundReceiver
+      const fundReceiverUsdcBalance = await mockUSDC.balanceOf(fundReceiver.address);
+      expect(fundReceiverUsdcBalance).to.equal(usdcAmount);
+
+      // Check vesting schedule (pre-sale tokens should be vested)
+      const vestingDetails = await icoAndVesting.getVestingDetails(whitelistedAddresses[1]);
+      expect(vestingDetails.totalAmount).to.equal(expectedTokens);
+      expect(vestingDetails.vestingType).to.equal(1); // VestingType.PrivateSeed
+
+      console.log("Pre-sale USDC purchase successful");
+    });
+
+    it("Should not allow non-whitelisted users to participate in pre-sale", async function () {
+      console.log("Testing non-whitelisted user restriction...");
+
+      const user3Proof = getProof(user3.address);
+
+      await expect(
+        icoAndVesting.connect(user3).buyTokensWithPOL(user3Proof, {
+          value: ethers.parseEther("1"),
+        })
+      ).to.be.revertedWith("Not whitelisted for pre-sale");
+
+      console.log("Non-whitelisted restriction working correctly");
+    });
+
+    it("Should respect purchase limits in pre-sale", async function () {
+      console.log("Testing purchase limits...");
+
+      // Pre-sale has max purchase limit of $10,000
+      // User1 (whitelistedAddresses[0]) has already spent $4 (1 POL)
+      // Try to buy with $10,000 more (should fail)
+
+      const user1Proof = getProof(whitelistedAddresses[0]);
+      const largePolAmount = ethers.parseEther("2500"); // 2500 POL = $10,000
+
+      await network.provider.request({
+  method: "hardhat_impersonateAccount",
+  params: [whitelistedAddresses[0]],
+});
+const whitelistedUser1 = await ethers.getSigner(whitelistedAddresses[0]);
+
+// Fund the impersonated account with ETH
+await owner.sendTransaction({
+  to: whitelistedAddresses[0],
+  value: ethers.parseEther("2600"), // Send 2600 ETH to cover 2500 POL + gas
+});
+
+await expect(
+  icoAndVesting.connect(whitelistedUser1).buyTokensWithPOL(user1Proof, {
+    value: largePolAmount,
+  })
+).to.be.revertedWith("Exceeds max purchase limit");
+
+      await network.provider.request({
+        method: "hardhat_stopImpersonatingAccount",
+        params: [whitelistedAddresses[0]],
+      });
+
+      console.log("Purchase limits enforced correctly");
+    });
+
+    it("Should allow admin to register a fiat purchase during pre-sale", async function () {
+      console.log("Testing fiat purchase registration...");
+
+      const user2Proof = getProof(whitelistedAddresses[1]);
+      const usdAmount = ethers.parseEther("500"); // $500
+
+      // Calculate expected tokens ($500 at $0.04 per token = 12,500 tokens)
+      const expectedTokens = ethers.parseEther("12500");
+
+      const tx = await icoAndVesting.registerFiatPurchase(whitelistedAddresses[1], usdAmount, "USD", user2Proof);
+
+      // Check if purchase was registered successfully
+      const receipt = await tx.wait();
+      const purchaseEvent = receipt.logs
+        .map((log) => {
+          try {
+            return icoAndVesting.interface.parseLog(log);
+          } catch {
+            return null;
+          }
+        })
+        .find((e) => e && e.name === "TokensPurchased");
+
+      expect(purchaseEvent).to.not.be.undefined;
+      expect(purchaseEvent.args.buyer).to.equal(whitelistedAddresses[1]);
+      expect(purchaseEvent.args.amount).to.equal(expectedTokens);
+
+      const vestingDetails = await icoAndVesting.getVestingDetails(whitelistedAddresses[1]);
+console.log("Vesting details for fiat purchase:", vestingDetails);
+expect(vestingDetails.totalAmount).to.equal(expectedTotalTokens);
+expect(vestingDetails.salePhase).to.equal(1); // SalePhase.PreSale
+expect(vestingDetails.vestingType).to.equal(0); // VestingType.PrivateSeed 
+    });
+
+    it("Should end the pre-sale phase manually", async function () {
+      console.log("Testing manual pre-sale closure...");
+
+      await icoAndVesting.endCurrentPhase();
+
+      expect(await icoAndVesting.currentPhase()).to.equal(0); // SalePhase.Inactive
+
+      console.log("Pre-sale ended successfully");
+    });
+  });
+
+  describe("Public Sale Phase", function () {
+    it("Should start the public sale phase", async function () {
+      console.log("Starting public sale phase...");
+
+      const startTime = (await ethers.provider.getBlock("latest")).timestamp + 100;
+      const duration = ONE_DAY * 14; // 14 days
+
+      await icoAndVesting.startPublicSale(startTime, duration);
+
+      expect(await icoAndVesting.currentPhase()).to.equal(2); // SalePhase.PublicSale
+
+      const publicSaleConfig = await icoAndVesting.saleConfigs(2);
+      expect(publicSaleConfig.startTime).to.equal(startTime);
+      expect(publicSaleConfig.endTime).to.equal(startTime + duration);
+
+      console.log("Public sale started successfully");
+
+      // Move time forward to start the public sale
+      await time.increaseTo(startTime + 1);
+      console.log("Moved time forward to public sale start");
+    });
+
+    it("Should allow any user to buy tokens with POL during public sale", async function () {
+      console.log("Testing token purchase with POL in public sale...");
+
+      const initialFundReceiverBalance = await ethers.provider.getBalance(fundReceiver.address);
+      const amountToSend = ethers.parseEther("2"); // 2 POL
+
+      // Calculate expected tokens (2 POL = $8, token price = $0.06)
+      // So 2 POL should buy 8/0.06 = 133.33 tokens
+      const expectedTokens = ethers.parseEther("133.333333333333333333");
+
+      // Even non-whitelisted user3 should be able to participate
+      const tx = await icoAndVesting.connect(user3).buyTokensWithPOL([], {
+        value: amountToSend,
+      });
+
+      // Check if purchase was successful
+      const receipt = await tx.wait();
+      const purchaseEvent = receipt.logs
+        .map((log) => {
+          try {
+            return icoAndVesting.interface.parseLog(log);
+          } catch {
+            return null;
+          }
+        })
+        .find((e) => e && e.name === "TokensPurchased");
+
+      expect(purchaseEvent).to.not.be.undefined;
+      expect(purchaseEvent.args.buyer).to.equal(user3.address);
+
+      // Check if funds were transferred to fundReceiver
+      const newFundReceiverBalance = await ethers.provider.getBalance(fundReceiver.address);
+      expect(ethers.toBigInt(newFundReceiverBalance) - ethers.toBigInt(initialFundReceiverBalance)).to.equal(ethers.toBigInt(amountToSend));
+
+      // Check if tokens were transferred directly (no vesting in public sale)
+      const user3Balance = await eyeToken.balanceOf(user3.address);
+      expect(user3Balance).to.be.gt(0);
+
+      console.log("Public sale POL purchase successful");
+    });
+
+    it("Should allow any user to buy tokens with USDC during public sale", async function () {
+      console.log("Testing token purchase with USDC in public sale...");
+
+      const usdcAmount = ethers.parseUnits("300", 6); // 300 USDC
+
+      await mockUSDC.connect(user3).approve(icoAndVestingAddress, usdcAmount);
+const tx = await icoAndVesting.connect(user3).buyTokensWithUSDC(usdcAmount, []); 
+
+      // Check if purchase was successful
+      const receipt = await tx.wait();
+      const purchaseEvent = receipt.logs
+        .map((log) => {
+          try {
+            return icoAndVesting.interface.parseLog(log);
+          } catch {
+            return null;
+          }
+        })
+        .find((e) => e && e.name === "Tokensconomic");
+
+      expect(purchaseEvent).to.not.be.undefined;
+      expect(purchaseEvent.args.buyer).to.equal(user3.address);
+
+      console.log("Public sale USDC purchase successful");
+    });
+
+    it("Should end the public sale phase", async function () {
+      console.log("Testing public sale closure...");
+
+      await icoAndVesting.endCurrentPhase();
+
+      expect(await icoAndVesting.currentPhase()).to.equal(3); // SalePhase.Ended
+
+      console.log("Public sale ended successfully");
+    });
+  });
+
+  describe("Vesting Functionality", function () {
+    it("Should release vested tokens after cliff period for pre-sale participants", async function () {
+      console.log("Testing vesting token release...");
+
+      // Pre-sale participants have their tokens vested
+      // Wait until after the cliff period (5 minutes in this test contract)
+      // Then some tokens should be releasable
+
+      const user1InitialBalance = await eyeToken.balanceOf(whitelistedAddresses[0]);
+      console.log("User1 initial token balance:", ethers.formatEther(user1InitialBalance));
+
+      // Move time forward to after cliff period
+      const vestingDetails = await icoAndVesting.getVestingDetails(whitelistedAddresses[0]);
+      await time.increaseTo(Number(vestingDetails.cliffEnd) + 1);
+      console.log("Moved time forward to after cliff period");
+
+      // Move time forward more to have some tokens vested
+      await time.increase(PRIVATE_SEED_DURATION / 2);
+      console.log("Moved time forward halfway through vesting period");
+
+      // Impersonate whitelisted address for claiming
+      await network.provider.request({
+        method: "hardhat_impersonateAccount",
+        params: [whitelistedAddresses[0]],
+      });
+      const whitelistedUser1 = await ethers.getSigner(whitelistedAddresses[0]);
+
+      // Claim vested tokens
+      await icoAndVesting.connect(whitelistedUser1).claimVestedTokens();
+
+      // Stop impersonating
+      await network.provider.request({
+        method: "hardhat_stopImpersonatingAccount",
+        params: [whitelistedAddresses[0]],
+      });
+
+      // Check new balance
+      const user1NewBalance = await eyeToken.balanceOf(whitelistedAddresses[0]);
+      console.log("User1 new token balance:", ethers.formatEther(user1NewBalance));
+
+      // Should have received some tokens
+      expect(user1NewBalance).to.be.gt(user1InitialBalance);
+
+      console.log("Vesting token release successful");
+    });
+
+    it("Should release all vested tokens after vesting period", async function () {
+      console.log("Testing full vesting completion...");
+
+      // Move time forward to after full vesting period
+      const vestingDetails = await icoAndVesting.getVestingDetails(whitelistedAddresses[0]);
+      await time.increaseTo(Number(vestingDetails.vestingEnd) + 1);
+      console.log("Moved time forward to after full vesting period");
+
+      // Impersonate whitelisted address for claiming
+      await network.provider.request({
+        method: "hardhat_impersonateAccount",
+        params: [whitelistedAddresses[0]],
+      });
+      const whitelistedUser1 = await ethers.getSigner(whitelistedAddresses[0]);
+
+      // Claim vested tokens
+      await icoAndVesting.connect(whitelistedUser1).claimVestedTokens();
+
+      // Stop impersonating
+      await network.provider.request({
+        method: "hardhat_stopImpersonatingAccount",
+        params: [whitelistedAddresses[0]],
+      });
+
+      // Check if user received all tokens
+      const user1Balance = await eyeToken.balanceOf(whitelistedAddresses[0]);
+      console.log("User1 final token balance:", ethers.formatEther(user1Balance));
+
+      // User should have received all their tokens
+      expect(user1Balance).to.equal(vestingDetails.totalAmount);
+
+      console.log("Full vesting completion successful");
+    });
+
+    it("Should allow admin to create team/advisor vesting schedule", async function () {
+      console.log("Testing team/advisor vesting creation...");
+
+      const teamTokens = ethers.parseEther("1000000"); // 1M tokens
+
+      const tx = await icoAndVesting.createTeamAdvisorVesting(user3.address, teamTokens);
+
+      // Check if vesting schedule was created
+      const receipt = await tx.wait();
+      const vestingEvent = receipt.logs
+        .map((log) => {
+          try {
+            return icoAndVesting.interface.parseLog(log);
+          } catch {
+            return null;
+          }
+        })
+        .find((e) => e && e.name === "VestingScheduleCreated");
+
+      expect(vestingEvent).to.not.be.undefined;
+      expect(vestingEvent.args.beneficiary).to.equal(user3.address);
+      expect(vestingEvent.args.amount).to.equal(teamTokens);
+      expect(vestingEvent.args.vestingType).to.equal(2); // VestingType.TeamAdvisor
+
+      // Check vesting details
+      const vestingDetails = await icoAndVesting.getVestingDetails(user3.address);
+      expect(vestingDetails.totalAmount).to.equal(teamTokens);
+      expect(vestingDetails.vestingType).to.equal(2); // VestingType.TeamAdvisor
+      expect(vestingDetails.cliffEnd).to.be.gt(vestingDetails.vestingStart); // Check cliff exists
+
+      console.log("Team/advisor vesting creation successful");
+    });
+  });
 
   describe("Admin Functions", function () {
-    before(async function() {
-      // Set the merkle root in the contract
-      await ICO.setWhitelistMerkleRoot(merkleRootHash);
-    });
-    
-    beforeEach(async function () {
-      // Ensure no active sale before each test
-      try { await ICO.endCurrentPhase(); } catch {}
-    });
+    it("Should withdraw unsold tokens after sale ends", async function () {
+      console.log("Testing unsold token withdrawal...");
 
-    it("should set whitelist Merkle root", async function () {
-      await ICO.setWhitelistMerkleRoot(merkleRootHash);
-      expect(await ICO.whitelistMerkleRoot()).to.equal(merkleRootHash);
-    });
+      const initialOwnerBalance = await eyeToken.balanceOf(owner.address);
+const contractBalance = await eyeToken.balanceOf(icoAndVestingAddress);  
 
-    it("should configure sale phase", async function () {
-      const newPrice = ethers.parseEther("0.05");
-      const duration = 3600; // 1 hour
-      const hardCap = ethers.parseEther("50000000"); // 50M
-      const minPurchase = ethers.parseEther("50");
-      const maxPurchase = ethers.parseEther("5000");
+      console.log("Contract token balance before withdrawal:", ethers.formatEther(contractBalance));
 
-      await ICO.configureSalePhase(1, newPrice, duration, hardCap, minPurchase, maxPurchase); // PreSale
-      const config = await ICO.saleConfigs(1);
-      expect(config.tokenPrice).to.equal(newPrice);
-      expect(config.hardCap).to.equal(hardCap);
-      expect(config.minPurchase).to.equal(minPurchase);
-      expect(config.maxPurchase).to.equal(maxPurchase);
+      await icoAndVesting.withdrawUnsoldTokens(owner.address);
+
+      const newOwnerBalance = await eyeToken.balanceOf(owner.address);
+      const newContractBalance = await eyeToken.balanceOf(icoAndVesting.address);
+
+      console.log("Contract token balance after withdrawal:", ethers.formatEther(newContractBalance));
+      console.log("Owner received tokens:", ethers.formatEther(newOwnerBalance.sub(initialOwnerBalance)));
+
+      // Contract should have 0 balance now
+      expect(newContractBalance).to.equal(0);
+      // Owner should have received all tokens
+      expect(newOwnerBalance.sub(initialOwnerBalance)).to.equal(contractBalance);
+
+      console.log("Unsold token withdrawal successful");
     });
 
-    it("should start pre-sale", async function () {
-      const startTime = await getFutureTimestamp(60); // 1 minute from now
-      const duration = 3600;
-      
-      // Configure sale phase first
-      await ICO.configureSalePhase(
-        1, // Pre-sale phase
-        ethers.parseEther("0.04"), // Price
-        duration,
-        ethers.parseEther("50000000"), // Hard cap
-        ethers.parseEther("100"), // Min purchase
-        ethers.parseEther("10000") // Max purchase
-      );
-      
-      await ICO.startPreSale(startTime, duration);
-      expect(await ICO.currentPhase()).to.equal(1); // PreSale
-      const config = await ICO.saleConfigs(1);
-      expect(config.startTime).to.equal(toBigInt(startTime));
-      expect(config.endTime).to.equal(toBigInt(startTime) + toBigInt(duration));
-    });
+    it("Should toggle pause functionality", async function () {
+      console.log("Testing pause functionality...");
 
-    it("should start public sale after pre-sale", async function () {
-      // First end any active sale
-      try { await ICO.endCurrentPhase(); } catch {}
-      
-      // Configure pre-sale phase
-      const block = await ethers.provider.getBlock('latest');
-      const preSaleStart = block.timestamp + 60n; // 1 minute from now
-      const preSaleDuration = 1800; // 30 minutes
-      
-      await ICO.configureSalePhase(
-        1, // Pre-sale phase
-        ethers.parseEther("0.04"), // Price
-        preSaleDuration,
-        ethers.parseEther("50000000"), // Hard cap
-        ethers.parseEther("100"), // Min purchase
-        ethers.parseEther("10000") // Max purchase
-      );
-      
-      await ICO.startPreSale(preSaleStart, preSaleDuration);
-      
-      // Move time forward to after pre-sale ends
-      await ethers.provider.send("evm_increaseTime", [Number(toBigInt(preSaleDuration)) + 1]);
-      await ethers.provider.send("evm_mine", []);
-      
-      // Configure public sale phase
-      const publicBlock = await ethers.provider.getBlock('latest');
-      const publicSaleStart = publicBlock.timestamp + 1n;
-      const publicSaleDuration = 3600; // 1 hour
-      
-      await ICO.configureSalePhase(
-        2, // Public sale phase
-        ethers.parseEther("0.05"), // Higher price
-        publicSaleDuration,
-        ethers.parseEther("100000000"), // Higher hard cap
-        ethers.parseEther("100"), // Min purchase
-        ethers.parseEther("50000") // Higher max purchase
-      );
-      
-      // Start public sale
-      await ICO.startPublicSale(publicSaleStart, publicSaleDuration);
-      
-      expect(await ICO.currentPhase()).to.equal(2); // PublicSale
-      const config = await ICO.saleConfigs(2);
-      expect(config.startTime).to.equal(publicSaleStart);
-      expect(config.endTime).to.equal(publicSaleStart + toBigInt(publicSaleDuration));
-    });
+      // Initially not paused
+      expect(await icoAndVesting.paused()).to.be.false;
 
-    it("should end current phase", async function () {
-      // End any active sale first
-      try { await ICO.endCurrentPhase(); } catch {}
-      
-      // Start a new sale
-      await ICO.setWhitelistMerkleRoot(merkleRoot);
-      const startTime = Math.floor(Date.now() / 1000) - 3600;
-      await ICO.startPreSale(startTime, 3600);
-      
-      // End the sale
-      await ICO.endCurrentPhase();
-      expect(await ICO.currentPhase()).to.equal(0); // Inactive
-    });
+      // Pause the contract
+      await icoAndVesting.togglePause();
+      expect(await icoAndVesting.paused()).to.be.true;
 
-    it("should set fund receiver", async function () {
-      const newReceiver = user3.address;
-      await ICO.setFundReceiver(newReceiver);
-      expect(await ICO.fundReceiverAddress()).to.equal(newReceiver);
-    });
+      // Unpause the contract
+      await icoAndVesting.togglePause();
+      expect(await icoAndVesting.paused()).to.be.false;
 
-    it("should withdraw unsold tokens", async function () {
-      await ICO.setWhitelistMerkleRoot(merkleRoot);
-      await ICO.startPreSale(Math.floor(Date.now() / 1000) - 3600, 3600);
-      await ICO.endCurrentPhase();
-      await ICO.startPublicSale(Math.floor(Date.now() / 1000) - 3600, 3600);
-      await ICO.endCurrentPhase();
-      const balanceBefore = await EYE.balanceOf(owner.address);
-      await ICO.withdrawUnsoldTokens(owner.address);
-      const balanceAfter = await EYE.balanceOf(owner.address);
-      expect(balanceAfter - balanceBefore).to.equal(ethers.parseEther("200000000"));
-    });
-
-    it("should toggle pause", async function () {
-      await ICO.togglePause();
-      expect(await ICO.paused()).to.be.true;
-      await ICO.togglePause();
-      expect(await ICO.paused()).to.be.false;
-    });
-
-    it("should create vesting schedules", async function () {
-      const amount = ethers.parseEther("10000");
-      await ICO.createPrivateSeedVesting(user1.address, amount);
-      const schedule = await ICO.vestingSchedules(user1.address);
-      expect(schedule.totalAmount).to.equal(amount);
-      expect(schedule.vestingType).to.equal(1); // PrivateSeed
-
-      await ICO.createTeamAdvisorVesting(user2.address, amount);
-      const schedule2 = await ICO.vestingSchedules(user2.address);
-      expect(schedule2.totalAmount).to.equal(amount);
-      expect(schedule2.vestingType).to.equal(2); // TeamAdvisor
+      console.log("Pause functionality working correctly");
     });
   });
 
-  describe("User Functions", function () {
+  describe("Edge Cases and Error Handling", function () {
+    // Start a new pre-sale phase for testing these cases
     beforeEach(async function () {
-      // End any active sale first
-      try { await ICO.endCurrentPhase(); } catch {}
-      
-      // Configure and start pre-sale
-      await ICO.setWhitelistMerkleRoot(merkleRoot);
-      
-      // Configure sale phase first
-      await ICO.configureSalePhase(
-        1, // Pre-sale phase
-        ethers.parseEther("0.04"), // Price
-        7200, // Duration
-        ethers.parseEther("50000000"), // Hard cap
-        ethers.parseEther("100"), // Min purchase
-        ethers.parseEther("10000") // Max purchase
-      );
-      
-      const startTime = (await ethers.provider.getBlock('latest')).timestamp + 60n; // 1 minute from now
-      const duration = 7200; // 2 hours duration
-      
-      // Configure sale phase first
-      await ICO.configureSalePhase(
-        1, // Pre-sale phase
-        ethers.parseEther("0.04"), // Price
-        duration,
-        ethers.parseEther("50000000"), // Hard cap
-        ethers.parseEther("100"), // Min purchase
-        ethers.parseEther("10000") // Max purchase
-      );
-      
-      await ICO.startPreSale(startTime, duration);
+      // Reset to inactive phase if not already
+      if ((await icoAndVesting.currentPhase()) !== 0) {
+        try {
+          await icoAndVesting.endCurrentPhase();
+        } catch (e) {
+          // Ignore errors, we just want to make sure we're in Inactive phase
+        }
+      }
+
+      // Transfer more tokens to the contract since we withdrew them all
+      await eyeToken.connect(fundReceiver).transfer(icoAndVestingAddress, ethers.parseEther("10000000")); // 10M tokens
+
+      // Start a new pre-sale
+      const startTime = (await ethers.provider.getBlock("latest")).timestamp + 100;
+      const duration = ONE_DAY * 7; // 7 days
+
+      try {
+        await icoAndVesting.startPreSale(startTime, duration);
+        await time.increaseTo(startTime + 1);
+      } catch (e) {
+        console.log("Error starting new pre-sale phase:", e.message);
+      }
     });
 
-    it("should buy tokens with POL", async function () {
-      const polAmount = ethers.parseEther("100"); // 100 POL
-      const usdValue = polAmount * BigInt(Math.floor(POL_PRICE)) / BigInt(1e8); // $50
-      const tokenAmount = usdValue * ethers.parseEther("1") / BigInt(PRE_SALE_PRICE); // 1250 EYE
-      const proof = getMerkleProof(user1.address);
+    it("Should reject purchases below minimum limit", async function () {
+      console.log("Testing minimum purchase limit...");
 
-      const fundReceiverBalanceBefore = await ethers.provider.getBalance(await fundReceiver.getAddress());
-      await ICO.connect(user1).buyTokensWithPOL(proof, { value: polAmount });
-      const fundReceiverBalanceAfter = await ethers.provider.getBalance(await fundReceiver.getAddress());
+      const user1Proof = getProof(whitelistedAddresses[0]);
+      const tinyAmount = ethers.parseEther("0.0001"); // Very small amount of POL
 
-      expect(fundReceiverBalanceAfter - fundReceiverBalanceBefore).to.equal(polAmount);
-      const schedule = await ICO.vestingSchedules(user1.address);
-      expect(schedule.totalAmount).to.equal(tokenAmount);
-    });
+      await network.provider.request({
+        method: "hardhat_impersonateAccount",
+        params: [whitelistedAddresses[0]],
+      });
+      const whitelistedUser1 = await ethers.getSigner(whitelistedAddresses[0]);
 
-    it("should buy tokens with USDC", async function () {
-      const usdcAmount = ethers.parseUnits("50", 6); // 50 USDC
-      const usdValue = usdcAmount * BigInt(Math.floor(USDC_PRICE)) / BigInt(1e8); // $50
-      const tokenAmount = usdValue * ethers.parseEther("1") / BigInt(PRE_SALE_PRICE); // 1250 EYE
-      const proof = getMerkleProof(user1.address);
-
-      await MockUSDC.connect(user1).approve(await ICO.getAddress(), usdcAmount);
-      await ICO.connect(user1).buyTokensWithUSDC(usdcAmount, proof);
-
-      const schedule = await ICO.vestingSchedules(user1.address);
-      expect(schedule.totalAmount).to.equal(tokenAmount);
-      expect(await MockUSDC.balanceOf(await fundReceiver.getAddress())).to.equal(usdcAmount);
-    });
-
-    it("should register fiat purchase", async function () {
-      const usdAmount = ethers.parseEther("100"); // $100
-      const tokenAmount = usdAmount * ethers.parseEther("1") / BigInt(PRE_SALE_PRICE); // 2500 EYE
-      const proof = getMerkleProof(user1.address);
-
-      await ICO.registerFiatPurchase(user1.address, usdAmount, "USD", proof);
-      const schedule = await ICO.vestingSchedules(user1.address);
-      expect(schedule.totalAmount).to.equal(tokenAmount);
-    });
-
-    it("should claim vested tokens", async function () {
-      const usdAmount = ethers.parseEther("100"); // $100
-      const tokenAmount = usdAmount * ethers.parseEther("1") / BigInt(PRE_SALE_PRICE); // 2500 EYE
-      const proof = getMerkleProof(user1.address);
-
-      await ICO.registerFiatPurchase(user1.address, usdAmount, "USD", proof);
-      await ethers.provider.send("evm_increaseTime", [900]); // After vesting duration
-      await ethers.provider.send("evm_mine", []);
-
-      const balanceBefore = await EYE.balanceOf(user1.address);
-      await ICO.connect(user1).claimVestedTokens();
-      const balanceAfter = await EYE.balanceOf(user1.address);
-      expect(balanceAfter - balanceBefore).to.equal(tokenAmount);
-    });
-  });
-
-  describe("View Functions", function () {
-    it("should get vesting details", async function () {
-      const amount = ethers.parseEther("10000");
-      // End any active sale first to avoid state conflicts
-      try { await ICO.endCurrentPhase(); } catch {}
-      
-      // Create vesting with valid parameters
-      const startTime = (await ethers.provider.getBlock('latest')).timestamp + 60;
-      await ICO.createPrivateSeedVesting(
-        user1.address,
-        amount
-      );
-      
-      const [total, released, releasable, start, end, cliff, type] = await ICO.getVestingDetails(user1.address);
-      expect(total).to.equal(amount);
-      expect(type).to.equal(1); // PrivateSeed
-    });
-
-    it("should get current sale details", async function () {
-      // End any active sale first
-      try { await ICO.endCurrentPhase(); } catch {}
-      
-      // Configure and start pre-sale
-      await ICO.setWhitelistMerkleRoot(merkleRoot);
-      const startTime = (await ethers.provider.getBlock('latest')).timestamp + 60n; // 1 minute from now
-      const duration = 7200; // 2 hours duration
-      
-      // Configure sale phase first
-      await ICO.configureSalePhase(
-        1, // Pre-sale phase
-        ethers.parseEther("0.04"), // Price
-        duration,
-        ethers.parseEther("50000000"), // Hard cap
-        ethers.parseEther("100"), // Min purchase
-        ethers.parseEther("10000") // Max purchase
-      );
-      
-      await ICO.startPreSale(startTime, duration);
-      
-      const [phase, price, start, end, hardCap, sold, remaining] = await ICO.getCurrentSaleDetails();
-      expect(phase).to.equal(1);
-      expect(price).to.equal(ethers.parseEther("0.04")); // Default pre-sale price
-      expect(hardCap).to.equal(ethers.parseEther("40000000")); // 20% of 200M
-    });
-
-    it("should check whitelist status", async function () {
-      // End any active sale first
-      try { await ICO.endCurrentPhase(); } catch {}
-      
-      await ICO.setWhitelistMerkleRoot(merkleRoot);
-      
-      // Get the proof for the user
-      const proof = merkleTree.getProof(0); // Get proof for the first user
-      
-      // Convert proof to the format expected by the contract
-      const formattedProof = proof.map(p => p.data);
-      
-      // Check whitelist status
-      expect(await ICO.isWhitelisted(user1.address, formattedProof)).to.be.true;
-      
-      // Check non-whitelisted user
-      const nonWhitelistedProof = [];
-      expect(await ICO.isWhitelisted(user3.address, nonWhitelistedProof)).to.be.false;
-    });
-  });
-
-  describe("Edge Cases", function () {
-    beforeEach(async function () {
-      // End any active sale first
-      try { await ICO.endCurrentPhase(); } catch {}
-      
-      // Configure and start pre-sale
-      await ICO.setWhitelistMerkleRoot(merkleRoot);
-      const startTime = Math.floor(Date.now() / 1000) - 3600; // Started 1 hour ago
-      const duration = 7200; // 2 hours duration
-      
-      // Configure sale phase first
-      await ICO.configureSalePhase(
-        1, // Pre-sale phase
-        ethers.parseEther("0.04"), // Price
-        duration,
-        ethers.parseEther("50000000"), // Hard cap
-        ethers.parseEther("100"), // Min purchase
-        ethers.parseEther("10000") // Max purchase
-      );
-      
-      await ICO.startPreSale(startTime, duration);
-    });
-    
-    it("should revert if purchase below minimum", async function () {
-      const polAmount = ethers.parseEther("10"); // ~$5, below $100 min
-      const proof = getMerkleProof(user1.address);
       await expect(
-        ICO.connect(user1).buyTokensWithPOL(proof, { value: polAmount })
+        icoAndVesting.connect(whitelistedUser1).buyTokensWithPOL(user1Proof, {
+          value: tinyAmount,
+        })
       ).to.be.revertedWith("Purchase below minimum limit");
+
+      await network.provider.request({
+        method: "hardhat_stopImpersonatingAccount",
+        params: [whitelistedAddresses[0]],
+      });
+
+      console.log("Minimum purchase limit enforced correctly");
     });
 
-    it("should revert if exceeds max purchase in pre-sale", async function () {
-      const usdAmount = ethers.parseEther("20000"); // $20k, above $10k max
-      const proof = getMerkleProof(user1.address);
-      await expect(
-        ICO.registerFiatPurchase(user1.address, usdAmount, "USD", proof)
-      ).to.be.revertedWith("Exceeds max purchase limit");
-    });
+    it("Should reject transactions when hard cap is reached", async function () {
+      console.log("Testing hard cap limit...");
 
-    it("should revert if not whitelisted in pre-sale", async function () {
-      const polAmount = ethers.parseEther("100");
-      const proof = []; // Empty proof for non-whitelisted user
-      await expect(
-        ICO.connect(user3).buyTokensWithPOL(proof, { value: polAmount })
-      ).to.be.revertedWith("Not whitelisted for pre-sale");
-    });
+      // First, update the hard cap to a very small amount
+      await icoAndVesting.configureSalePhase(
+        1, // SalePhase.PreSale
+        ethers.parseEther("0.04"), // $0.04 per token
+        ONE_DAY * 7, // 7 days duration
+        ethers.parseEther("10"), // Only 10 tokens (very small hard cap)
+        ethers.parseEther("1"), // $1 min purchase
+        ethers.parseEther("10000") // $10k max purchase
+      );
 
-    it("should revert if sale not active", async function () {
-      await ICO.endCurrentPhase();
-      const polAmount = ethers.parseEther("100");
-      const proof = getMerkleProof(user1.address);
+      const user1Proof = getProof(whitelistedAddresses[0]);
+      const amount = ethers.parseEther("1"); // 1 POL = $4 = 100 tokens at $0.04 each
+
+      await network.provider.request({
+        method: "hardhat_impersonateAccount",
+        params: [whitelistedAddresses[0]],
+      });
+      const whitelistedUser1 = await ethers.getSigner(whitelistedAddresses[0]);
+
       await expect(
-        ICO.connect(user1).buyTokensWithPOL(proof, { value: polAmount })
-      ).to.be.revertedWith("Sale not active");
+        icoAndVesting.connect(whitelistedUser1).buyTokensWithPOL(user1Proof, {
+          value: amount,
+        })
+      ).to.be.revertedWith("Not enough tokens left");
+
+      await network.provider.request({
+        method: "hardhat_stopImpersonatingAccount",
+        params: [whitelistedAddresses[0]],
+      });
+
+      console.log("Hard cap limit enforced correctly");
     });
   });
-});
+}); 
