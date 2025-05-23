@@ -5,7 +5,7 @@ const { ethers } = require('ethers');
 // Define the whitelisted addresses
 const addresses = [
   '0xfE98c32B4F998eAf7850E18FA6afBbD665C45E39',
-  '0xCc5e4E757E151aDA1F62EC9C82EB65efB95ef86c',
+  '0xCc5e4E757E151aDA1F62EC9C82EB65efB95ef86c', 
   '0x9E32B3e2C55bd16422cdE109C6591e2960E7ABcF'
 ];
 

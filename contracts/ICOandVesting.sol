@@ -4,778 +4,534 @@ pragma solidity ^0.8.19;
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol"; 
-import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
-import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
-import "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
-import "./interfaces/IEYE.sol"; 
+import "@openzeppelin/contracts-upgradeable/token/ERC20/IERC20Upgradeable.sol";
+import "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
+import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol"; 
+import "./interfaces/IEYE.sol";
 
-/**
- * @title EYETokenICOAndVesting
- * @dev Smart contract for EYE token ICO with pre-sale, public sale, and linear vesting
- */
-contract EYETokenICOAndVesting is
-    OwnableUpgradeable, 
-    UUPSUpgradeable, 
-    ReentrancyGuardUpgradeable,
-    PausableUpgradeable 
+contract EyeICOAndVesting is
+    OwnableUpgradeable,
+    UUPSUpgradeable,
+    ReentrancyGuardUpgradeable
 {
-    enum SalePhase {
-        Inactive,
+    enum ICORounds {
+        PrivateSeed,
         PreSale,
-        PublicSale, 
-        Ended
+        PublicSale
+    }
+    enum Role {
+        TeamMember,
+        Advisor
     }
 
-    enum VestingType {
-        None,
-        PrivateSeed, // 6-month cliff, 18-month linear vesting
-        TeamAdvisor  // 12-month cliff, 36-month linear vesting
+    struct ICORoundDetails {
+        uint8 allocationPercent;
+        uint256 tokenPrice; // Price in USD with 6 decimals (e.g., $0.04 = 40000)
+        uint256 TotalTokenAmount;
+        uint256 availableTokenAmount;
+        uint8 TGE; // TGE percentage (e.g., 5% = 5)
+        uint256 cliff; // in Seconds
+        uint256 duration; // in Seconds
+        uint256 walletCap; // in USD with 6 decimals (e.g., $10,000 = 10000000000)
+        bool isActive;
     }
 
-    struct SaleConfig {
-        uint256 tokenPrice; // Price in USD with 18 decimals (e.g., $0.04 = 4 * 10^16)
-        uint256 startTime;
-        uint256 endTime;
-        uint256 hardCap; // Maximum tokens to sell in this phase
-        uint256 minPurchase; // Minimum purchase amount in USD
-        uint256 maxPurchase; // Maximum purchase amount in USD per address
-        uint256 tokensSold;
-        bool manualClose; // Can be closed manually before endTime
+    struct Vesting {
+        uint256 totalTokenAmount; // Total tokens in vesting (excludes TGE)
+        uint256 tokenTransferred;
+        uint256 start;
+        uint256 cliff;
+        uint256 duration;
+        address userAddress;
     }
 
-    struct VestingSchedule {
-        uint256 totalAmount;      // Total amount of tokens to be vested
-        uint256 cliffDuration;    // Cliff duration in seconds
-        uint256 vestingDuration;  // Total vesting duration in seconds
-        uint256 startTime;        // Start time of the vesting period
-        uint256 released;         // Amount of tokens released so far
-        VestingType vestingType;  // Type of vesting schedule
+    struct CollaboratorVesting {
+        uint256 totalTokenAmount;
+        uint256 tokenAvailableForVesting;
+        uint256 cliff;
+        uint256 duration;
     }
 
-    // Vesting constants
-    uint256 private constant PRIVATE_SEED_CLIFF = 300 seconds;  // 5 minutes
-    uint256 private constant PRIVATE_SEED_DURATION = 900 seconds; // 15 minutes
-    uint256 private constant TEAM_ADVISOR_CLIFF = 300 seconds;  // 5 minutes
-    uint256 private constant TEAM_ADVISOR_DURATION = 900 seconds; // 15 minutes
+    struct AddCollaboratorInput {
+        uint256 amount;
+        address userAddress;
+    }
 
-    // Sale phase configuration
-    SalePhase public currentPhase;
-    mapping(SalePhase => SaleConfig) public saleConfigs;
-    
-    // Token and funds
+    event TokensPurchased(
+        address indexed purchaser,
+        uint256 tokenAmount,
+        uint256 tgeAmount,
+        uint256 vestingId,
+        string stablecoinType
+    );
+    event CollaboratorAdded(
+        address indexed userAddress,
+        uint256 amount,
+        uint256 vestingId
+    );
+    event VestingAdded(
+        uint256 indexed vestingId,
+        address indexed userAddress,
+        uint256 totalTokenAmount
+    );
+    event TokensClaimed(
+        uint256 indexed vestingId,
+        address indexed beneficiary,
+        uint256 claimableAmount
+    );
+    event ICORoundChanged(ICORounds indexed round);
+    event PresaleClosed();
+    event TokensWithdrawn(address indexed receiver, uint256 amount);
+    event RootForPresaleUpdated(bytes32 NewRoot);
+    event WhitelistUserAdded(address indexed userAddress);
+
     IEYE public eyeToken;
-    address public fundReceiverAddress; // Gnosis Safe wallet
+    ICORounds public round;
+    uint256 public vestingId;
+    bytes32 public rootForPresale;
+    address public fundReceiverAddress;
+    address public usdcAddress;
+    address public usdtAddress;
+    AggregatorV3Interface public usdcPriceFeed;
+    AggregatorV3Interface public usdtPriceFeed;
     
-    // Whitelist
-    bytes32 public whitelistMerkleRoot;
-    mapping(address => bool) public hasParticipatedInPreSale;
-    mapping(address => uint256) public preSaleUsdSpent; // Tracks USD spent per user in pre-sale
-    
-    // Payment tokens
-    IERC20 public usdcToken;
-    
-    // Price feeds
-    AggregatorV3Interface public polUsdPriceFeed;
-    AggregatorV3Interface public usdcUsdPriceFeed;
-    
-    // Vesting
-    mapping(address => VestingSchedule) public vestingSchedules;
-    
-    // Events
-    event PhaseChanged(SalePhase phase);
-    event TokensPurchased(address indexed buyer, uint256 amount, string paymentMethod, uint256 paymentAmount);
-    event WhitelistUpdated(bytes32 merkleRoot);
-    event VestingScheduleCreated(address indexed beneficiary, uint256 amount, VestingType vestingType);
-    event TokensReleased(address indexed beneficiary, uint256 amount);
-    
-    /**
-     * @dev Disable initializers in the implementation contract
-     */
+    // Fixed-size array to hold the details for each round
+    ICORoundDetails[3] public icoRoundDetails;
+    CollaboratorVesting[2] public collaboratorVestings;
+    mapping(uint256 => Vesting) public vestings;
+    mapping(address => uint256) public userPurchases;
+
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
     }
 
-    /**
-     * @dev Initialize the contract with the EYE token, fund receiver, and price feeds
-     */
     function initialize(
         IEYE _eyeToken,
-        address _fundReceiver,
-        IERC20 _usdcToken,
-        AggregatorV3Interface _polUsdPriceFeed,
-        AggregatorV3Interface _usdcUsdPriceFeed
+        address _fundReceiverAddress,
+        address _usdcAddress,
+        address _usdtAddress,
+        address _usdcPriceFeed,
+        address _usdtPriceFeed 
     ) public initializer {
         __Ownable_init(msg.sender);
         __UUPSUpgradeable_init();
         __ReentrancyGuard_init();
-        __Pausable_init();
+
+        uint TotalTokenSupply = 400000000 * 1e18;
+        vestingId = 0;
+
+        // Private/Seed Sale: 10% allocation, $0.04 price, 5% TGE, 6-month cliff, 18-month vesting, $10,000 wallet cap
+        icoRoundDetails[uint(ICORounds.PrivateSeed)] = ICORoundDetails(
+            10,
+            40000, // $0.04 with 6 decimals
+            (TotalTokenSupply * 10) / 100,
+            (TotalTokenSupply * 10) / 100,
+            5, // 5% TGE
+            300, // 5 minutes cliff for testing, should be 6 months (6 * 30 * 24 * 60 * 60)
+            600, // 10 minutes vesting for testing, should be 18 months (18 * 30 * 24 * 60 * 60)
+            10000 * 1e6, // $10,000 with 6 decimals
+            true
+        );
         
+        // Pre-Sale: 10% allocation, $0.04 price, 20% TGE, 6-month cliff, 18-month vesting, $10,000 wallet cap
+        icoRoundDetails[uint(ICORounds.PreSale)] = ICORoundDetails(
+            10,
+            40000, // $0.04 with 6 decimals
+            (TotalTokenSupply * 10) / 100,
+            (TotalTokenSupply * 10) / 100,
+            20, // 20% TGE
+            300, // 5 minutes cliff for testing
+            600, // 10 minutes vesting for testing
+            10000 * 1e6, // $10,000 with 6 decimals
+            false
+        );
+        
+        // Public Sale: 15% allocation, $0.06 price, 100% TGE (no vesting), $20,000 wallet cap
+        icoRoundDetails[uint(ICORounds.PublicSale)] = ICORoundDetails(
+            15,
+            60000, // $0.06 with 6 decimals
+            (TotalTokenSupply * 15) / 100,
+            (TotalTokenSupply * 15) / 100,
+            100, // 100% TGE (immediate release)
+            0,
+            0,
+            20000 * 1e6, // $20,000 with 6 decimals
+            false
+        );
+
+        // Team & Advisors: No TGE, 12-month cliff, 36-month vesting
+        collaboratorVestings[uint(Role.TeamMember)] = CollaboratorVesting(
+            (TotalTokenSupply * 10) / 100,
+            (TotalTokenSupply * 10) / 100,
+            12 * 30 * 24 * 60 * 60, // 12 months
+            36 * 30 * 24 * 60 * 60  // 36 months
+        );
+        collaboratorVestings[uint(Role.Advisor)] = CollaboratorVesting(
+            (TotalTokenSupply * 5) / 100,
+            (TotalTokenSupply * 5) / 100,
+            12 * 30 * 24 * 60 * 60, // 12 months
+            36 * 30 * 24 * 60 * 60  // 36 months
+        );
+
         eyeToken = _eyeToken;
-        fundReceiverAddress = _fundReceiver;
-        usdcToken = _usdcToken;
-        polUsdPriceFeed = _polUsdPriceFeed;
-        usdcUsdPriceFeed = _usdcUsdPriceFeed;
-        
-        // Setup initial sale phase
-        currentPhase = SalePhase.Inactive;
-        
-        uint256 totalTokenSupply = 1_000_000_000 * 1e18; // 1 billion EYE tokens
-        
-        // Configure pre-sale
-        saleConfigs[SalePhase.PreSale] = SaleConfig({
-            tokenPrice: 4 * 10**16, // $0.04 with 18 decimals
-            startTime: 0,
-            endTime: 0,
-            hardCap: (totalTokenSupply * 25) / 100, // 25% of supply
-            minPurchase: 1 * 10**18, // $1 min purchase
-            maxPurchase: 10_000 * 10**18, // $10,000 max purchase
-            tokensSold: 0,
-            manualClose: true
-        });
-        
-        // Configure public sale
-        saleConfigs[SalePhase.PublicSale] = SaleConfig({
-            tokenPrice: 6 * 10**16, // $0.06 with 18 decimals
-            startTime: 0,
-            endTime: 0,
-            hardCap: (totalTokenSupply * 15) / 100, // 15% of supply
-            minPurchase: 1 * 10**18, // $1 min purchase
-            maxPurchase: type(uint256).max, // No max for public sale (unlimited)
-            tokensSold: 0,
-            manualClose: true
-        });
+        round = ICORounds.PrivateSeed;
+        fundReceiverAddress = _fundReceiverAddress;
+        usdcAddress = _usdcAddress;
+        usdtAddress = _usdtAddress;
+        usdcPriceFeed = AggregatorV3Interface(_usdcPriceFeed);
+        usdtPriceFeed = AggregatorV3Interface(_usdtPriceFeed);
     }
-    
-    // ==================== Admin Functions ====================
 
-    /**
-     * @dev Set the whitelist Merkle root
-     * @param _merkleRoot New Merkle root for whitelist verification
-     */
-    function setWhitelistMerkleRoot(bytes32 _merkleRoot) external onlyOwner {
-        require(_merkleRoot != bytes32(0), "Invalid Merkle root");
-        require(currentPhase != SalePhase.PublicSale && currentPhase != SalePhase.Ended, "Cannot update during public sale or after end");
-        whitelistMerkleRoot = _merkleRoot;
-        emit WhitelistUpdated(_merkleRoot);
+    function buyTokensWithUSDC(
+        uint256 _usdcAmount,
+        bytes32[] memory proof
+    ) external nonReentrant {
+        require(_usdcAmount > 0, "buyTokensWithUSDC: No USDC amount specified");
+        
+        // Verify we're receiving USDC payment
+        IERC20Upgradeable usdc = IERC20Upgradeable(usdcAddress);
+        require(
+            usdc.allowance(msg.sender, address(this)) >= _usdcAmount,
+            "buyTokensWithUSDC: Insufficient USDC allowance"
+        );
+        
+        _buyTokens(usdcAddress, _usdcAmount, proof, "USDC");
     }
-    
-    /**
-     * @dev Configure sale phase settings
-     * @param phase Sale phase to configure
-     * @param tokenPrice Price per token in USD (18 decimals)
-     * @param duration Duration of the sale in seconds
-     * @param hardCap Maximum tokens to sell
-     * @param minPurchase Minimum purchase amount in USD (18 decimals)
-     * @param maxPurchase Maximum purchase amount in USD (18 decimals)
-     */
-    function configureSalePhase(
-        SalePhase phase,
-        uint256 tokenPrice,
-        uint256 duration,
-        uint256 hardCap,
-        uint256 minPurchase,
-        uint256 maxPurchase
+
+    function buyTokensWithUSDT(
+        uint256 _usdtAmount,
+        bytes32[] memory proof
+    ) external nonReentrant {
+        require(_usdtAmount > 0, "buyTokensWithUSDT: No USDT amount specified");
+        
+        // Verify we're receiving USDT payment
+        IERC20Upgradeable usdt = IERC20Upgradeable(usdtAddress);
+        require(
+            usdt.allowance(msg.sender, address(this)) >= _usdtAmount,
+            "buyTokensWithUSDT: Insufficient USDT allowance"
+        );
+        
+        _buyTokens(usdtAddress, _usdtAmount, proof, "USDT");
+    }
+
+    function _buyTokens(
+        address _stablecoin,
+        uint256 _stablecoinAmount,
+        bytes32[] memory proof,
+        string memory stablecoinType
+    ) private {
+        // Check if the round is active
+        ICORoundDetails storage ICORoundDetail = icoRoundDetails[uint(round)];
+        require(ICORoundDetail.isActive, "_buyTokens: Round is not active");
+        
+        // Check whitelist for pre-sale round
+        if (round == ICORounds.PreSale) {
+            require(
+                addressIsWhiteListed(proof, msg.sender),
+                "_buyTokens: Address is not whitelisted for pre-sale"
+            );
+        }
+        
+        // Calculate USD value of stablecoin
+        uint256 usdValue = getUSDValue(_stablecoin, _stablecoinAmount);
+        
+        // Check wallet cap
+        require(
+            userPurchases[msg.sender] + usdValue <= ICORoundDetail.walletCap,
+            "_buyTokens: Exceeds wallet cap"
+        );
+        
+        // Calculate token amount
+        uint256 tokenAmount = (usdValue * 1e18) / ICORoundDetail.tokenPrice;
+        
+        // Check if enough tokens available
+        require(
+            tokenAmount <= ICORoundDetail.availableTokenAmount &&
+            eyeToken.balanceOf(address(this)) >= tokenAmount &&
+            ICORoundDetail.availableTokenAmount != 0,
+            "_buyTokens: Not enough tokens available in this round"
+        );
+        
+        // Update available tokens
+        ICORoundDetail.availableTokenAmount -= tokenAmount;
+        
+        // Update user purchases
+        userPurchases[msg.sender] += usdValue;
+        
+        // Transfer stablecoins to fund receiver
+        IERC20Upgradeable stablecoin = IERC20Upgradeable(_stablecoin);
+        require(
+            stablecoin.transferFrom(msg.sender, fundReceiverAddress, _stablecoinAmount),
+            "_buyTokens: Stablecoin transfer failed"
+        );
+        
+        uint256 currentVestingId = 0;
+        uint256 tgeAmount = 0;
+        
+        // Calculate TGE amount
+        if (ICORoundDetail.TGE > 0) {
+            tgeAmount = (tokenAmount * ICORoundDetail.TGE) / 100;
+        }
+        
+        // Handle token distribution based on TGE percentage
+        if (ICORoundDetail.TGE == 100) {
+            // 100% TGE - immediate release (Public Sale)
+            require(
+                eyeToken.transfer(msg.sender, tokenAmount),
+                "_buyTokens: Token transfer failed"
+            );
+        } else {
+            // Create vesting for remaining tokens (after TGE)
+            uint256 vestingAmount = tokenAmount - tgeAmount;
+            if (vestingAmount > 0) {
+                currentVestingId = addUserToVesting(
+                    vestingAmount, // Only vesting amount, not total
+                    ICORoundDetail.cliff,
+                    ICORoundDetail.duration,
+                    msg.sender
+                );
+            }
+            
+            // Transfer TGE amount immediately if applicable
+            if (tgeAmount > 0) {
+                require(
+                    eyeToken.transfer(msg.sender, tgeAmount),
+                    "_buyTokens: TGE token transfer failed"
+                );
+            }
+        }
+        
+        emit TokensPurchased(
+            msg.sender,
+            tokenAmount,
+            tgeAmount,
+            currentVestingId,
+            stablecoinType
+        );
+    }
+
+    function claimTokens(uint256 _vestingId) external {
+        Vesting storage vesting = vestings[_vestingId];
+        require(
+            vesting.userAddress != address(0),
+            "claimTokens: Invalid vesting id"
+        );
+        require(
+            vesting.userAddress == msg.sender,
+            "claimTokens: Only vesting beneficiary can claim tokens"
+        );
+
+        uint256 claimableAmount = getClaimableTokenAmount(_vestingId);
+        require(claimableAmount > 0, "claimTokens: No claimable amount");
+
+        vesting.tokenTransferred += claimableAmount;
+        require(
+            eyeToken.transfer(msg.sender, claimableAmount),
+            "claimTokens: Transfer failed"
+        );
+        
+        emit TokensClaimed(_vestingId, msg.sender, claimableAmount);
+    }
+
+    function addWhitelistUsers(address[] memory users) external onlyOwner {
+        require(round == ICORounds.PreSale, "addWhitelistUsers: Only available during pre-sale");
+        
+        for (uint i = 0; i < users.length; i++) {
+            require(
+                users[i] != address(0),
+                "addWhitelistUsers: Invalid user address"
+            );
+            emit WhitelistUserAdded(users[i]);
+        }
+    }
+
+    function setRootForPresale(bytes32 _rootForPresale) external onlyOwner {
+        require(
+            _rootForPresale != bytes32(0),
+            "setRootForPresale: Invalid root"
+        );
+        rootForPresale = _rootForPresale;
+        emit RootForPresaleUpdated(_rootForPresale);
+    }
+
+    function setICORound(ICORounds _round) external onlyOwner {
+        round = _round;
+        icoRoundDetails[uint(round)].isActive = true;
+        emit ICORoundChanged(_round);
+    }
+
+    function closePreSale() external onlyOwner {
+        require(
+            round == ICORounds.PreSale,
+            "closePreSale: Current round is not pre-sale"
+        );
+        icoRoundDetails[uint(ICORounds.PreSale)].isActive = false;
+        emit PresaleClosed();
+    }
+
+    function withdrawTokens(
+        ICORounds _round,
+        address userAddress,
+        uint256 amount
     ) external onlyOwner {
-        require(phase == SalePhase.PreSale || phase == SalePhase.PublicSale, "Invalid phase");
-        
-        saleConfigs[phase].tokenPrice = tokenPrice;
-        saleConfigs[phase].hardCap = hardCap;
-        saleConfigs[phase].minPurchase = minPurchase;
-        saleConfigs[phase].maxPurchase = maxPurchase;
-        
-        if (duration > 0 && saleConfigs[phase].startTime > 0) {
-            saleConfigs[phase].endTime = saleConfigs[phase].startTime + duration;
-        }
-    }
-    
-    /**
-     * @dev Start the pre-sale phase
-     * @param startTime Start time for pre-sale
-     * @param duration Duration in seconds for pre-sale
-     */
-    function startPreSale(uint256 startTime, uint256 duration) external onlyOwner {
-        require(currentPhase == SalePhase.Inactive, "Sale already active");
-        require(startTime >= block.timestamp, "Start time must be in future");
-        require(duration > 0, "Duration must be positive"); 
-        require(whitelistMerkleRoot != bytes32(0), "Whitelist not set");
-        
-        saleConfigs[SalePhase.PreSale].startTime = startTime;
-        saleConfigs[SalePhase.PreSale].endTime = startTime + duration;
-        
-        currentPhase = SalePhase.PreSale;
-        emit PhaseChanged(SalePhase.PreSale);
-    }
-    
-    /**
-     * @dev Start the public sale phase
-     * @param startTime Start time for public sale
-     * @param duration Duration in seconds for public sale
-     */
-    function startPublicSale(uint256 startTime, uint256 duration) external onlyOwner {
-        require(currentPhase == SalePhase.Inactive, "Sale already active");
-        require(saleConfigs[SalePhase.PreSale].endTime > 0, "Pre-sale not completed");
-        // Confirm about 48 hours 
-        // require(block.timestamp >= saleConfigs[SalePhase.PreSale].endTime + 48 hours, "48-hour buffer required after pre-sale");
-        require(startTime >= block.timestamp, "Start time must be in future");
-        require(duration > 0, "Duration must be positive");
-        
-        saleConfigs[SalePhase.PublicSale].startTime = startTime;
-        saleConfigs[SalePhase.PublicSale].endTime = startTime + duration;
-        
-        currentPhase = SalePhase.PublicSale;   
-        emit PhaseChanged(SalePhase.PublicSale);
-    }
-    
-    /**
-     * @dev End the current sale phase
-     */
-    function endCurrentPhase() public onlyOwner {
-        require(currentPhase == SalePhase.PreSale || currentPhase == SalePhase.PublicSale, "No active sale phase");
-        require(saleConfigs[currentPhase].manualClose, "Manual close not allowed");
-        
-        if (currentPhase == SalePhase.PublicSale) {
-            currentPhase = SalePhase.Ended;
-        } else {
-            currentPhase = SalePhase.Inactive;
-        }
-        
-        emit PhaseChanged(currentPhase);
-    }
-    
-    /**
-     * @dev Update fund receiver address (Gnosis Safe)
-     */
-    function setFundReceiver(address _newReceiver) external onlyOwner {
-        require(_newReceiver != address(0), "Invalid address");
-        fundReceiverAddress = _newReceiver;
-    }
-    
-    /**
-     * @dev Withdraw unsold tokens after sale ends
-     */
-    function withdrawUnsoldTokens(address _to) external onlyOwner {
-        require(currentPhase == SalePhase.Ended, "Sale not ended");
-        uint256 balance = eyeToken.balanceOf(address(this));
-        require(balance > 0, "No tokens to withdraw");
-        require(eyeToken.transfer(_to, balance), "Transfer failed");
-    }
-    
-    /**
-     * @dev Emergency pause/unpause
-     */
-    function togglePause() external onlyOwner {
-        if (paused()) {
-            _unpause();
-        } else {
-            _pause();
-        }
-    }
-    
-    /**
-     * @dev Create a vesting schedule for a team member or advisor
-     * @param beneficiary Address of the team member or advisor
-     * @param amount Amount of tokens to vest
-     */
-    function createTeamAdvisorVesting(address beneficiary, uint256 amount) 
-        external 
-        onlyOwner 
-    {
-        require(beneficiary != address(0), "Invalid beneficiary address");
-        require(amount > 0, "Amount must be greater than 0");
-        
-        createVestingScheduleWithType(beneficiary, amount, VestingType.TeamAdvisor);
-    }
-    
-    /**
-     * @dev Create a vesting schedule for private/seed sale participant
-     * @param beneficiary Address of the participant
-     * @param amount Amount of tokens to vest
-     */
-    function createPrivateSeedVesting(address beneficiary, uint256 amount) 
-        external 
-        onlyOwner 
-    {
-        require(beneficiary != address(0), "Invalid beneficiary address");
-        require(amount > 0, "Amount must be greater than 0");
-        
-        createVestingScheduleWithType(beneficiary, amount, VestingType.PrivateSeed);
-    }
-    
-    /**
-     * @dev Admin function to register a fiat purchase (USD or EUR converted to USD)
-     * @param buyer Buyer's address
-     * @param usdAmount USD equivalent amount
-     * @param currency Currency used ("USD" or "EUR")
-     * @param merkleProof Merkle proof for whitelist verification (only for pre-sale)
-     */
-    function registerFiatPurchase(
-        address buyer, 
-        uint256 usdAmount,
-        string calldata currency,
-        bytes32[] calldata merkleProof
-    ) 
-        external 
-        onlyOwner 
-        nonReentrant 
-    {
-        require(usdAmount > 0, "Invalid USD amount");
-        require(buyer != address(0), "Invalid buyer address");
+        require(amount > 0, "withdrawTokens: Invalid token amount");
         require(
-            keccak256(abi.encodePacked(currency)) == keccak256(abi.encodePacked("USD")) ||
-            keccak256(abi.encodePacked(currency)) == keccak256(abi.encodePacked("EUR")),
-            "Unsupported currency"
-        );
-        
-        validatePurchaseEligibilityForUser(buyer, merkleProof);
-        
-        uint256 tokenAmount = calculateTokenAmount(usdAmount);
-        processPurchaseForUser(buyer, tokenAmount, usdAmount, currency);
-    }
-    
-    // ==================== Public Functions ====================
-    
-    /**
-     * @dev Purchase tokens with native currency (POL)
-     * @param merkleProof Merkle proof for whitelist verification (only for pre-sale)
-     */
-    function buyTokensWithPOL(bytes32[] calldata merkleProof) 
-        external 
-        payable 
-        nonReentrant 
-        whenNotPaused 
-    {
-        require(msg.value > 0, "No POL sent");
-        
-        validatePurchaseEligibility(merkleProof);
-        
-        uint256 polValueInUsd = getPolValueInUsd(msg.value);
-        uint256 tokenAmount = calculateTokenAmount(polValueInUsd);
-        
-        processPurchase(tokenAmount, polValueInUsd, "POL");
-        
-        (bool success, ) = payable(fundReceiverAddress).call{value: msg.value}("");
-        require(success, "Transfer to fund receiver failed");
-    }
-    
-    /**
-     * @dev Purchase tokens with USDC
-     * @param usdcAmount Amount of USDC to spend (6 decimals)
-     * @param merkleProof Merkle proof for whitelist verification (only for pre-sale)
-     */
-    function buyTokensWithUSDC(uint256 usdcAmount, bytes32[] calldata merkleProof) 
-        external 
-        nonReentrant 
-        whenNotPaused 
-    {
-        require(usdcAmount > 0, "No USDC sent");
-        
-        validatePurchaseEligibility(merkleProof);
-        
-        uint256 usdValue = getUsdcValueInUsd(usdcAmount);
-        uint256 tokenAmount = calculateTokenAmount(usdValue);
-        
+            icoRoundDetails[uint(_round)].availableTokenAmount >= amount,
+            "withdrawTokens: Not enough tokens"
+        ); 
+        icoRoundDetails[uint(_round)].availableTokenAmount -= amount;
         require(
-            usdcToken.transferFrom(msg.sender, fundReceiverAddress, usdcAmount),
-            "USDC transfer failed"
+            eyeToken.balanceOf(address(this)) >= amount,
+            "withdrawTokens: Insufficient token balance"
         );
-        
-        processPurchase(tokenAmount, usdValue, "USDC");
+        require(eyeToken.transfer(userAddress, amount), "withdrawTokens: Transfer failed");
+        emit TokensWithdrawn(userAddress, amount);
     }
-    
-    /**
-     * @dev Claim vested tokens
-     */
-    function claimVestedTokens() external nonReentrant {
-        VestingSchedule storage vestingSchedule = vestingSchedules[msg.sender];
-        
-        require(vestingSchedule.totalAmount > 0, "No vesting schedule found");
-        
-        uint256 releasable = calculateReleasableAmount(msg.sender);
-        require(releasable > 0, "No tokens are due for release");
-        
-        vestingSchedule.released += releasable;
-        
-        require(eyeToken.transfer(msg.sender, releasable), "Token transfer failed");
-        
-        emit TokensReleased(msg.sender, releasable);
+
+    function addCollaborator(
+        Role _role,
+        AddCollaboratorInput[] memory collaborators
+    ) public onlyOwner {
+        CollaboratorVesting storage collaboratorVesting = collaboratorVestings[
+            uint(_role)
+        ];
+
+        for (uint i = 0; i < collaborators.length; ) {
+            if (
+                collaboratorVesting.tokenAvailableForVesting >= collaborators[i].amount &&
+                collaborators[i].userAddress != address(0)
+            ) {
+                uint256 currentVestingId = addUserToVesting(
+                    collaborators[i].amount,
+                    collaboratorVesting.cliff,
+                    collaboratorVesting.duration,
+                    collaborators[i].userAddress
+                );
+                collaboratorVesting.tokenAvailableForVesting -= collaborators[i].amount;
+                emit CollaboratorAdded(
+                    collaborators[i].userAddress,
+                    collaborators[i].amount,
+                    currentVestingId
+                );
+            }
+            unchecked {
+                i++;
+            }
+        }
     }
-    
-    /**
-     * @dev Get vesting details for a user
-     */
-    function getVestingDetails(address user) 
-        external 
-        view 
-        returns (
-            uint256 totalAmount,
-            uint256 released,
-            uint256 releasable,
-            uint256 vestingStart,
-            uint256 vestingEnd,
-            uint256 cliffEnd,
-            VestingType vestingType
-        ) 
-    {
-        VestingSchedule memory schedule = vestingSchedules[user];
-        
-        return (
-            schedule.totalAmount,
-            schedule.released,
-            calculateReleasableAmount(user),
-            schedule.startTime,
-            schedule.startTime + schedule.vestingDuration,
-            schedule.startTime + schedule.cliffDuration,
-            schedule.vestingType
+
+    function addressIsWhiteListed(
+        bytes32[] memory proof,
+        address _userAddress
+    ) public view returns (bool) {
+        return MerkleProof.verify(
+            proof,
+            rootForPresale,
+            keccak256(abi.encodePacked(_userAddress))
         );
     }
-    
-    /**
-     * @dev Get current sale phase details
-     */
-    function getCurrentSaleDetails() 
-        external 
-        view 
-        returns (
-            SalePhase phase,
-            uint256 price,
-            uint256 startTime,
-            uint256 endTime,
-            uint256 hardCap,
-            uint256 tokensSold,
-            uint256 remaining
-        ) 
-    {
-        phase = currentPhase;
+
+    function getVestedTokenAmount(
+        uint _vestingId
+    ) public view returns (uint256 vestedTokenAmount) {
+        Vesting memory vesting = vestings[_vestingId];
+        require(
+            vesting.userAddress != address(0),
+            "getVestedTokenAmount: Invalid vesting id"
+        );
         
-        if (phase == SalePhase.PreSale || phase == SalePhase.PublicSale) {
-            SaleConfig memory config = saleConfigs[phase];
-            price = config.tokenPrice;
-            startTime = config.startTime;
-            endTime = config.endTime;
-            hardCap = config.hardCap;
-            tokensSold = config.tokensSold;
-            remaining = config.hardCap > config.tokensSold ? config.hardCap - config.tokensSold : 0;
-        }
-    }
-    
-    /**
-     * @dev Check if an address is whitelisted
-     * @notice This function verifies if a user is whitelisted using the Merkle proof verification
-     */
-    function isWhitelisted(address user, bytes32[] calldata merkleProof) public view returns (bool) {
-        if (whitelistMerkleRoot == bytes32(0)) return false;
-        
-        // Generate the leaf from the user address
-        bytes32 leaf = keccak256(bytes.concat(keccak256(abi.encode(user))));
-        return MerkleProof.verify(merkleProof, whitelistMerkleRoot, leaf);
-    }
-    
-    // ==================== Internal Functions ====================
-    
-    /**
-     * @dev Validate if a purchase is eligible based on current phase and whitelist
-     */
-    function validatePurchaseEligibility(bytes32[] calldata merkleProof) internal view {
-        require(currentPhase == SalePhase.PreSale || currentPhase == SalePhase.PublicSale, "Sale not active");
-        
-        SaleConfig memory config = saleConfigs[currentPhase];
-        
-        require(block.timestamp >= config.startTime, "Sale not started");
-        require(block.timestamp <= config.endTime || !config.manualClose, "Sale ended");
-        
-        if (currentPhase == SalePhase.PreSale) {
-            require(isWhitelisted(msg.sender, merkleProof), "Not whitelisted for pre-sale");
-        }
-    }
-    
-    /**
-     * @dev Validate if a purchase is eligible for a specific user (for fiat purchases)
-     */
-    function validatePurchaseEligibilityForUser(address user, bytes32[] calldata merkleProof) internal view {
-        require(currentPhase == SalePhase.PreSale || currentPhase == SalePhase.PublicSale, "Sale not active");
-        
-        SaleConfig memory config = saleConfigs[currentPhase];
-        
-        require(block.timestamp >= config.startTime, "Sale not started");
-        require(block.timestamp <= config.endTime || !config.manualClose, "Sale ended");
-        
-        if (currentPhase == SalePhase.PreSale) {
-            require(isWhitelisted(user, merkleProof), "User not whitelisted for pre-sale");
-        }
-    }
-    
-    /**
-     * @dev Process a token purchase for the sender
-     */
-    function processPurchase(
-        uint256 tokenAmount, 
-        uint256 usdValue, 
-        string memory paymentMethod
-    ) internal {
-        processPurchaseForUser(msg.sender, tokenAmount, usdValue, paymentMethod);
-    }
-    
-    /**
-     * @dev Process a token purchase for a specific user
-     */
-    function processPurchaseForUser(
-        address user,
-        uint256 tokenAmount, 
-        uint256 usdValue, 
-        string memory paymentMethod
-    ) internal {
-        SaleConfig storage config = saleConfigs[currentPhase];
-        
-        require(usdValue >= config.minPurchase, "Purchase below minimum limit");
-        if (currentPhase == SalePhase.PreSale && config.maxPurchase > 0) {
-            preSaleUsdSpent[user] += usdValue;
-            require(preSaleUsdSpent[user] <= config.maxPurchase, "Exceeds max purchase limit");
-        }
-        
-        require(tokenAmount <= config.hardCap - config.tokensSold, "Not enough tokens left");
-        require(eyeToken.balanceOf(address(this)) >= tokenAmount, "Insufficient token balance");
-        
-        config.tokensSold += tokenAmount;
-        
-        if (currentPhase == SalePhase.PreSale) {
-            hasParticipatedInPreSale[user] = true;
-            createVestingScheduleWithType(user, tokenAmount, VestingType.PrivateSeed);
-        } else {
-            require(eyeToken.transfer(user, tokenAmount), "Token transfer failed");
-        }
-        
-        emit TokensPurchased(user, tokenAmount, paymentMethod, usdValue);
-    }
-    
-    /**
-     * @dev Create a vesting schedule for a user with specific vesting type
-     */
-    function createVestingScheduleWithType(
-        address beneficiary, 
-        uint256 amount, 
-        VestingType vestingType
-    ) internal {
-        VestingSchedule storage schedule = vestingSchedules[beneficiary];
-        
-        uint256 cliffDuration;
-        uint256 vestingDuration;
-        
-        if (vestingType == VestingType.PrivateSeed) {
-            cliffDuration = PRIVATE_SEED_CLIFF;
-            vestingDuration = PRIVATE_SEED_DURATION;
-        } else if (vestingType == VestingType.TeamAdvisor) {
-            cliffDuration = TEAM_ADVISOR_CLIFF;
-            vestingDuration = TEAM_ADVISOR_DURATION;
-        } else {
-            revert("Invalid vesting type");
-        }
-        
-        if (schedule.totalAmount > 0 && schedule.vestingType == vestingType) {
-            schedule.totalAmount += amount;
-        } else if (schedule.totalAmount > 0 && schedule.vestingType != vestingType) {
-            revert("User already has a different vesting type");
-        } else {
-            vestingSchedules[beneficiary] = VestingSchedule({
-                totalAmount: amount,
-                cliffDuration: cliffDuration,
-                vestingDuration: vestingDuration,
-                startTime: schedule.totalAmount > 0 ? schedule.startTime : block.timestamp,
-                released: 0,
-                vestingType: vestingType
-            });
-        }
-        
-        emit VestingScheduleCreated(beneficiary, amount, vestingType);
-    }
-    
-    /**
-     * @dev Calculate the amount of tokens to be released for a beneficiary
-     */
-    function calculateReleasableAmount(address beneficiary) internal view returns (uint256) {
-        VestingSchedule memory vestingSchedule = vestingSchedules[beneficiary];
-        
-        uint256 vested = calculateVestedAmount(vestingSchedule);
-        return vested - vestingSchedule.released;
-    }
-    
-    /**
-     * @dev Calculate the total vested amount based on vesting schedule
-     */
-    function calculateVestedAmount(VestingSchedule memory vestingSchedule) internal view returns (uint256) {
-        if (block.timestamp < vestingSchedule.startTime + vestingSchedule.cliffDuration) {
+        uint256 cliff = vesting.cliff + vesting.start;
+        if (block.timestamp < cliff) {
             return 0;
-        } else if (block.timestamp >= vestingSchedule.startTime + vestingSchedule.vestingDuration) {
-            return vestingSchedule.totalAmount;
+        } else if (
+            block.timestamp >= vesting.start + vesting.cliff + vesting.duration
+        ) {
+            return vesting.totalTokenAmount;
         } else {
-            uint256 timeFromStart = block.timestamp - vestingSchedule.startTime;
-            uint256 vestedAmount = (vestingSchedule.totalAmount * timeFromStart) / vestingSchedule.vestingDuration;
-            return vestedAmount;
+            // Calculate how much has vested linearly
+            uint256 timeFromCliff = block.timestamp - cliff;
+            return (vesting.totalTokenAmount * timeFromCliff) / vesting.duration;
         }
     }
-    
-    /**
-     * @dev Calculate token amount based on USD value
-     */
-    function calculateTokenAmount(uint256 usdValue) internal view returns (uint256) {
-        SaleConfig memory config = saleConfigs[currentPhase];
-        return (usdValue * 10**18) / config.tokenPrice;
-    }
-    
-    /**
-     * @dev Get POL value in USD
-     */
-    function getPolValueInUsd(uint256 polAmount) internal view returns (uint256) {
-        (, int256 price, , uint256 updatedAt, ) = polUsdPriceFeed.latestRoundData();
-        require(price > 0, "Invalid POL/USD price");
-        // commenting for testing 
-        // require(updatedAt >= block.timestamp - 1 hours, "Stale POL price feed");
+
+    function getClaimableTokenAmount(
+        uint _vestingId
+    ) public view returns (uint256 claimableTokenAmount) {
+        Vesting memory vesting = vestings[_vestingId];
+        uint256 vestedTokenAmount = getVestedTokenAmount(_vestingId);
         
-        uint256 polPrice = uint256(price) * 10**10; // 8-decimal price to 18 decimals
-        return (polAmount * polPrice) / 10**18;
+        // Vested tokens till now - token transferred till now = current claimable amount
+        return vestedTokenAmount > vesting.tokenTransferred ? 
+               vestedTokenAmount - vesting.tokenTransferred : 0;
     }
-    
-    /**
-     * @dev Get USDC value in USD
-     */
-    function getUsdcValueInUsd(uint256 usdcAmount) internal view returns (uint256) {
-        (, int256 price, , uint256 updatedAt, ) = usdcUsdPriceFeed.latestRoundData();
-        require(price > 0, "Invalid USDC/USD price");
-        //commenting this for testing 
-        //require(updatedAt >= block.timestamp - 1 hours, "Stale USDC price feed");
+
+    function getICORoundDetails() public view returns (ICORoundDetails memory) {
+        return icoRoundDetails[uint(round)];
+    }
+
+    function getUserPurchaseAmount(address user) public view returns (uint256) {
+        return userPurchases[user];
+    }
+
+    function getUSDValue(address stablecoin, uint256 amount) public view returns (uint256) {
+        require(
+            stablecoin == usdcAddress || stablecoin == usdtAddress,
+            "getUSDValue: Invalid stablecoin address"
+        );
+
+        AggregatorV3Interface priceFeed = stablecoin == usdcAddress ? usdcPriceFeed : usdtPriceFeed;
+        (
+            , // roundId
+            int256 price,
+            , // startedAt
+            uint256 updatedAt,
+            // answeredInRound
+        ) = priceFeed.latestRoundData();
+
+        require(price > 0, "getUSDValue: Invalid price from price feed");
+        require(block.timestamp - updatedAt <= 1 hours, "getUSDValue: Stale price data");
+
+        // Chainlink price feeds return prices with 8 decimals (e.g., USDC/USD = 1.00 is 1e8)
+        // Stablecoins (USDC, USDT) have 6 decimals
+        // USD value = (amount * price) / (10^priceDecimals) normalized to 6 decimals
+        uint256 priceDecimals = priceFeed.decimals(); // Typically 8 for USDC/USD, USDT/USD
+        uint256 usdValue = (amount * uint256(price)) / (10 ** priceDecimals);
         
-        // USDC is 6 decimals, price is 8 decimals, result in 18 decimals
-        return (usdcAmount * uint256(price) * 10**10) / 10**8;
-    }
-    
-    /**
-     * @dev Authorize contract upgrade
-     */
-    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
-
-    ////////Debug function \\\\\\\
-    // remove this functions before sending to team
-
-    function debugPriceFeed() external view returns (
-        int256 price,
-        uint256 updatedAt,
-        bool isStale,
-        bool isValid
-    ) {
-        (, price, , updatedAt, ) = polUsdPriceFeed.latestRoundData();
-        isStale = updatedAt < block.timestamp - 1 hours;
-        isValid = price > 0;
-        return (price, updatedAt, isStale, isValid);
+        // Adjust to 6 decimals to match tokenPrice and walletCap
+        return usdValue;
     }
 
-    function debugWhitelist(bytes32[] calldata merkleProof) external view returns (
-        bool isWhitelistedResult,
-        bytes32 calculatedLeaf,
-        bytes32 currentRoot
-    ) {
-        isWhitelistedResult = isWhitelisted(msg.sender, merkleProof);
-        // Generate the leaf using the new method
-        calculatedLeaf = keccak256(bytes.concat(keccak256(abi.encode(msg.sender))));
-        currentRoot = whitelistMerkleRoot;
-        return (isWhitelistedResult, calculatedLeaf, currentRoot);
-    } 
-
-    function debugSaleState() external view returns (
-        SalePhase phase,
-        uint256 start,
-        uint256 end,
-        uint256 current,
-        bool started,
-        bool ended,
-        uint256 hardCap,
-        uint256 sold,
-        uint256 balance
-    ) {
-        phase = currentPhase;
-        start = saleConfigs[phase].startTime;
-        end = saleConfigs[phase].endTime;
-        current = block.timestamp;
-        started = current >= start;
-        ended = current > end;
-        hardCap = saleConfigs[phase].hardCap;
-        sold = saleConfigs[phase].tokensSold;
-        balance = eyeToken.balanceOf(address(this));
-        return (phase, start, end, current, started, ended, hardCap, sold, balance);
+    function setPriceFeed(address stablecoin, address priceFeed) external onlyOwner {
+        require(stablecoin == usdcAddress || stablecoin == usdtAddress, "setPriceFeed: Invalid stablecoin");
+        require(priceFeed != address(0), "setPriceFeed: Invalid price feed");
+        if (stablecoin == usdcAddress) {
+            usdcPriceFeed = AggregatorV3Interface(priceFeed);
+        } else {
+            usdtPriceFeed = AggregatorV3Interface(priceFeed);
+        }
     }
 
-    function getFullContractStatus() external view returns (
-    SalePhase phase,
-    bool isActive,
-    bool hasStarted,
-    bool hasEnded,
-    uint256 currentTime,
-    uint256 phaseStartTime,
-    uint256 phaseEndTime,
-    bool isWhitelistSet,
-    uint256 contractTokenBalance,
-    bool isPaused,
-    address fundReceiver
-) {
-    SaleConfig memory config = saleConfigs[currentPhase];
-    
-    return (
-        currentPhase,
-        currentPhase == SalePhase.PreSale || currentPhase == SalePhase.PublicSale,
-        block.timestamp >= config.startTime,
-        block.timestamp > config.endTime,
-        block.timestamp,
-        config.startTime,
-        config.endTime,
-        whitelistMerkleRoot != bytes32(0),
-        eyeToken.balanceOf(address(this)),
-        paused(),
-        fundReceiverAddress
-    );
-
-}
-
-// Add this function for emergency testing
-function emergencyBuyTokens(bytes32[] calldata merkleProof) 
-    external 
-    payable 
-    nonReentrant 
-{
-    require(msg.value > 0, "No POL sent");
-    
-    // Skip time validation but keep phase validation
-    require(currentPhase == SalePhase.PreSale || currentPhase == SalePhase.PublicSale, "Sale not active");
-    
-    if (currentPhase == SalePhase.PreSale) {
-        require(isWhitelisted(msg.sender, merkleProof), "Not whitelisted for pre-sale");
+    function addUserToVesting(
+        uint256 _tokenAmount,
+        uint256 _cliff,
+        uint256 _duration,
+        address _userAddress
+    ) private returns (uint256) {
+        vestingId++;
+        vestings[vestingId] = Vesting({
+            totalTokenAmount: _tokenAmount,
+            tokenTransferred: 0,
+            start: block.timestamp,
+            cliff: _cliff,
+            duration: _duration,
+            userAddress: _userAddress
+        });
+        emit VestingAdded(vestingId, _userAddress, _tokenAmount);
+        return vestingId;
     }
-    
-    uint256 polValueInUsd = getPolValueInUsd(msg.value);
-    uint256 tokenAmount = calculateTokenAmount(polValueInUsd);
-    
-    // Skip additional checks and directly transfer tokens
-    SaleConfig storage config = saleConfigs[currentPhase];
-    config.tokensSold += tokenAmount;
-    
-    if (currentPhase == SalePhase.PreSale) {
-        hasParticipatedInPreSale[msg.sender] = true;
-        createVestingScheduleWithType(msg.sender, tokenAmount, VestingType.PrivateSeed);
-    } else {
-        require(eyeToken.transfer(msg.sender, tokenAmount), "Token transfer failed");
-    }
-    
-    emit TokensPurchased(msg.sender, tokenAmount, "POL", polValueInUsd);
-    
-    (bool success, ) = payable(fundReceiverAddress).call{value: msg.value}("");
-    require(success, "Transfer to fund receiver failed");
-}
 
-// Add this emergency function to fix timing issues
-function updateSaleTimings(SalePhase phase, uint256 newStartTime, uint256 newEndTime) external onlyOwner {
-    require(phase == SalePhase.PreSale || phase == SalePhase.PublicSale, "Invalid phase");
-    saleConfigs[phase].startTime = newStartTime;
-    saleConfigs[phase].endTime = newEndTime;
-}
-
-
+    function _authorizeUpgrade(
+        address newImplementation
+    ) internal override onlyOwner {}
 }
