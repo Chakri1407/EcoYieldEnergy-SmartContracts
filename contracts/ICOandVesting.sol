@@ -4,10 +4,10 @@ pragma solidity ^0.8.19;
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/token/ERC20/IERC20Upgradeable.sol";
-import "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
+import "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol"; 
 import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol"; 
-import "./interfaces/IEYE.sol";
+// import "./interfaces/IEYE.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol"; 
 
 contract EyeICOAndVesting is
     OwnableUpgradeable,
@@ -15,14 +15,14 @@ contract EyeICOAndVesting is
     ReentrancyGuardUpgradeable
 {
     enum ICORounds {
-        PrivateSeed,
-        PreSale,
-        PublicSale
-    }
-    enum Role {
-        TeamMember,
-        Advisor
-    }
+        // PrivateSeed,
+        PreSale 
+        // PublicSale
+    } 
+    // enum Role {
+    //     TeamMember,
+    //     Advisor
+    // }
 
     struct ICORoundDetails {
         uint8 allocationPercent;
@@ -45,17 +45,17 @@ contract EyeICOAndVesting is
         address userAddress;
     }
 
-    struct CollaboratorVesting {
-        uint256 totalTokenAmount;
-        uint256 tokenAvailableForVesting;
-        uint256 cliff;
-        uint256 duration;
-    }
+    // struct CollaboratorVesting {
+    //     uint256 totalTokenAmount;
+    //     uint256 tokenAvailableForVesting;
+    //     uint256 cliff;
+    //     uint256 duration;
+    // }
 
-    struct AddCollaboratorInput {
-        uint256 amount;
-        address userAddress;
-    }
+    // struct AddCollaboratorInput {
+    //     uint256 amount;
+    //     address userAddress;
+    // }
 
     event TokensPurchased(
         address indexed purchaser,
@@ -64,11 +64,11 @@ contract EyeICOAndVesting is
         uint256 vestingId,
         string stablecoinType
     );
-    event CollaboratorAdded(
-        address indexed userAddress,
-        uint256 amount,
-        uint256 vestingId
-    );
+    // event CollaboratorAdded(
+    //     address indexed userAddress,
+    //     uint256 amount,
+    //     uint256 vestingId
+    // );
     event VestingAdded(
         uint256 indexed vestingId,
         address indexed userAddress,
@@ -84,8 +84,13 @@ contract EyeICOAndVesting is
     event TokensWithdrawn(address indexed receiver, uint256 amount);
     event RootForPresaleUpdated(bytes32 NewRoot);
     event WhitelistUserAdded(address indexed userAddress);
-
-    IEYE public eyeToken;
+    
+    event TGETokensTransferred(
+    address indexed purchaser,
+    uint256 tgeAmount,
+    string stablecoinType
+    );
+    IERC20 public eyeToken;
     ICORounds public round;
     uint256 public vestingId;
     bytes32 public rootForPresale;
@@ -97,7 +102,7 @@ contract EyeICOAndVesting is
     
     // Fixed-size array to hold the details for each round
     ICORoundDetails[3] public icoRoundDetails;
-    CollaboratorVesting[2] public collaboratorVestings;
+//    CollaboratorVesting[2] public collaboratorVestings;
     mapping(uint256 => Vesting) public vestings;
     mapping(address => uint256) public userPurchases;
 
@@ -107,7 +112,7 @@ contract EyeICOAndVesting is
     }
 
     function initialize(
-        IEYE _eyeToken,
+        IERC20 _eyeToken,
         address _fundReceiverAddress,
         address _usdcAddress,
         address _usdtAddress,
@@ -122,60 +127,60 @@ contract EyeICOAndVesting is
         vestingId = 0;
 
         // Private/Seed Sale: 10% allocation, $0.04 price, 5% TGE, 6-month cliff, 18-month vesting, $10,000 wallet cap
-        icoRoundDetails[uint(ICORounds.PrivateSeed)] = ICORoundDetails(
-            10,
-            40000, // $0.04 with 6 decimals
-            (TotalTokenSupply * 10) / 100,
-            (TotalTokenSupply * 10) / 100,
-            5, // 5% TGE
-            300, // 5 minutes cliff for testing, should be 6 months (6 * 30 * 24 * 60 * 60)
-            600, // 10 minutes vesting for testing, should be 18 months (18 * 30 * 24 * 60 * 60)
-            10000 * 1e6, // $10,000 with 6 decimals
-            true
-        );
+        // icoRoundDetails[uint(ICORounds.PrivateSeed)] = ICORoundDetails(
+        //     10,
+        //     40000, // $0.04 with 6 decimals
+        //     (TotalTokenSupply * 10) / 100,
+        //     (TotalTokenSupply * 10) / 100,
+        //     5, // 5% TGE
+        //     300, // 5 minutes cliff for testing, should be 6 months (6 * 30 * 24 * 60 * 60)
+        //     600, // 10 minutes vesting for testing, should be 18 months (18 * 30 * 24 * 60 * 60)
+        //     10000 * 1e6, // $10,000 with 6 decimals
+        //     true
+        // );
         
         // Pre-Sale: 10% allocation, $0.04 price, 20% TGE, 6-month cliff, 18-month vesting, $10,000 wallet cap
         icoRoundDetails[uint(ICORounds.PreSale)] = ICORoundDetails(
             10,
             40000, // $0.04 with 6 decimals
             (TotalTokenSupply * 10) / 100,
-            (TotalTokenSupply * 10) / 100,
-            20, // 20% TGE
+            (TotalTokenSupply * 10) / 100, 
+            20, // 20% TGE 
             300, // 5 minutes cliff for testing
             600, // 10 minutes vesting for testing
             10000 * 1e6, // $10,000 with 6 decimals
-            false
+            true
         );
         
         // Public Sale: 15% allocation, $0.06 price, 100% TGE (no vesting), $20,000 wallet cap
-        icoRoundDetails[uint(ICORounds.PublicSale)] = ICORoundDetails(
-            15,
-            60000, // $0.06 with 6 decimals
-            (TotalTokenSupply * 15) / 100,
-            (TotalTokenSupply * 15) / 100,
-            100, // 100% TGE (immediate release)
-            0,
-            0,
-            20000 * 1e6, // $20,000 with 6 decimals
-            false
-        );
+        // icoRoundDetails[uint(ICORounds.PublicSale)] = ICORoundDetails(
+        //     15,
+        //     60000, // $0.06 with 6 decimals
+        //     (TotalTokenSupply * 15) / 100,
+        //     (TotalTokenSupply * 15) / 100,
+        //     100, // 100% TGE (immediate release)
+        //     0,
+        //     0,
+        //     20000 * 1e6, // $20,000 with 6 decimals
+        //     false
+        // );
 
         // Team & Advisors: No TGE, 12-month cliff, 36-month vesting
-        collaboratorVestings[uint(Role.TeamMember)] = CollaboratorVesting(
-            (TotalTokenSupply * 10) / 100,
-            (TotalTokenSupply * 10) / 100,
-            12 * 30 * 24 * 60 * 60, // 12 months
-            36 * 30 * 24 * 60 * 60  // 36 months
-        );
-        collaboratorVestings[uint(Role.Advisor)] = CollaboratorVesting(
-            (TotalTokenSupply * 5) / 100,
-            (TotalTokenSupply * 5) / 100,
-            12 * 30 * 24 * 60 * 60, // 12 months
-            36 * 30 * 24 * 60 * 60  // 36 months
-        );
+        // collaboratorVestings[uint(Role.TeamMember)] = CollaboratorVesting(
+        //     (TotalTokenSupply * 10) / 100,
+        //     (TotalTokenSupply * 10) / 100,
+        //     12 * 30 * 24 * 60 * 60, // 12 months
+        //     36 * 30 * 24 * 60 * 60  // 36 months
+        // );
+        // collaboratorVestings[uint(Role.Advisor)] = CollaboratorVesting(
+        //     (TotalTokenSupply * 5) / 100,
+        //     (TotalTokenSupply * 5) / 100,
+        //     12 * 30 * 24 * 60 * 60, // 12 months
+        //     36 * 30 * 24 * 60 * 60  // 36 months
+        // );
 
         eyeToken = _eyeToken;
-        round = ICORounds.PrivateSeed;
+        round = ICORounds.PreSale;
         fundReceiverAddress = _fundReceiverAddress;
         usdcAddress = _usdcAddress;
         usdtAddress = _usdtAddress;
@@ -190,7 +195,7 @@ contract EyeICOAndVesting is
         require(_usdcAmount > 0, "buyTokensWithUSDC: No USDC amount specified");
         
         // Verify we're receiving USDC payment
-        IERC20Upgradeable usdc = IERC20Upgradeable(usdcAddress);
+        IERC20 usdc = IERC20(usdcAddress);
         require(
             usdc.allowance(msg.sender, address(this)) >= _usdcAmount,
             "buyTokensWithUSDC: Insufficient USDC allowance"
@@ -206,7 +211,7 @@ contract EyeICOAndVesting is
         require(_usdtAmount > 0, "buyTokensWithUSDT: No USDT amount specified");
         
         // Verify we're receiving USDT payment
-        IERC20Upgradeable usdt = IERC20Upgradeable(usdtAddress);
+        IERC20 usdt = IERC20(usdtAddress);
         require(
             usdt.allowance(msg.sender, address(this)) >= _usdtAmount,
             "buyTokensWithUSDT: Insufficient USDT allowance"
@@ -260,7 +265,7 @@ contract EyeICOAndVesting is
         userPurchases[msg.sender] += usdValue;
         
         // Transfer stablecoins to fund receiver
-        IERC20Upgradeable stablecoin = IERC20Upgradeable(_stablecoin);
+        IERC20 stablecoin = IERC20(_stablecoin);
         require(
             stablecoin.transferFrom(msg.sender, fundReceiverAddress, _stablecoinAmount),
             "_buyTokens: Stablecoin transfer failed"
@@ -299,6 +304,7 @@ contract EyeICOAndVesting is
                     eyeToken.transfer(msg.sender, tgeAmount),
                     "_buyTokens: TGE token transfer failed"
                 );
+            emit TGETokensTransferred(msg.sender, tgeAmount, stablecoinType);
             }
         }
         
@@ -334,17 +340,17 @@ contract EyeICOAndVesting is
         emit TokensClaimed(_vestingId, msg.sender, claimableAmount);
     }
 
-    function addWhitelistUsers(address[] memory users) external onlyOwner {
-        require(round == ICORounds.PreSale, "addWhitelistUsers: Only available during pre-sale");
+    // function addWhitelistUsers(address[] memory users) external onlyOwner {
+    //     require(round == ICORounds.PreSale, "addWhitelistUsers: Only available during pre-sale");
         
-        for (uint i = 0; i < users.length; i++) {
-            require(
-                users[i] != address(0),
-                "addWhitelistUsers: Invalid user address"
-            );
-            emit WhitelistUserAdded(users[i]);
-        }
-    }
+    //     for (uint i = 0; i < users.length; i++) {
+    //         require(
+    //             users[i] != address(0),
+    //             "addWhitelistUsers: Invalid user address"
+    //         );
+    //         emit WhitelistUserAdded(users[i]);
+    //     }
+    // }
 
     function setRootForPresale(bytes32 _rootForPresale) external onlyOwner {
         require(
@@ -356,7 +362,7 @@ contract EyeICOAndVesting is
     }
 
     function setICORound(ICORounds _round) external onlyOwner {
-        round = _round;
+        round = _round; 
         icoRoundDetails[uint(round)].isActive = true;
         emit ICORoundChanged(_round);
     }
@@ -389,37 +395,37 @@ contract EyeICOAndVesting is
         emit TokensWithdrawn(userAddress, amount);
     }
 
-    function addCollaborator(
-        Role _role,
-        AddCollaboratorInput[] memory collaborators
-    ) public onlyOwner {
-        CollaboratorVesting storage collaboratorVesting = collaboratorVestings[
-            uint(_role)
-        ];
+    // function addCollaborator(
+    //     Role _role,
+    //     AddCollaboratorInput[] memory collaborators
+    // ) public onlyOwner {
+    //     CollaboratorVesting storage collaboratorVesting = collaboratorVestings[
+    //         uint(_role)
+    //     ];
 
-        for (uint i = 0; i < collaborators.length; ) {
-            if (
-                collaboratorVesting.tokenAvailableForVesting >= collaborators[i].amount &&
-                collaborators[i].userAddress != address(0)
-            ) {
-                uint256 currentVestingId = addUserToVesting(
-                    collaborators[i].amount,
-                    collaboratorVesting.cliff,
-                    collaboratorVesting.duration,
-                    collaborators[i].userAddress
-                );
-                collaboratorVesting.tokenAvailableForVesting -= collaborators[i].amount;
-                emit CollaboratorAdded(
-                    collaborators[i].userAddress,
-                    collaborators[i].amount,
-                    currentVestingId
-                );
-            }
-            unchecked {
-                i++;
-            }
-        }
-    }
+    //     for (uint i = 0; i < collaborators.length; ) {
+    //         if (
+    //             collaboratorVesting.tokenAvailableForVesting >= collaborators[i].amount &&
+    //             collaborators[i].userAddress != address(0)
+    //         ) {
+    //             uint256 currentVestingId = addUserToVesting(
+    //                 collaborators[i].amount,
+    //                 collaboratorVesting.cliff,
+    //                 collaboratorVesting.duration,
+    //                 collaborators[i].userAddress
+    //             );
+    //             collaboratorVesting.tokenAvailableForVesting -= collaborators[i].amount;
+    //             emit CollaboratorAdded(
+    //                 collaborators[i].userAddress,
+    //                 collaborators[i].amount,
+    //                 currentVestingId
+    //             );
+    //         }
+    //         unchecked {
+    //             i++;
+    //         }
+    //     }
+    // }
 
     function addressIsWhiteListed(
         bytes32[] memory proof,
