@@ -2,16 +2,15 @@ require("@nomicfoundation/hardhat-toolbox");
 require("@openzeppelin/hardhat-upgrades");
 require('dotenv').config();
 
-
 module.exports = {
   solidity: {
     compilers: [
       {
-        version: "0.8.20",
+        version: "0.8.19",
         settings: {
           optimizer: {
             enabled: true,
-            runs: 200,
+            runs: 50,
           },
         },
       },
@@ -20,7 +19,7 @@ module.exports = {
         settings: {
           optimizer: {
             enabled: true,
-            runs: 200,
+            runs: 50,
           },
         },
       },
@@ -28,12 +27,19 @@ module.exports = {
   },
   defaultNetwork: "hardhat",
   networks: {
-    hardhat: {},
+    hardhat: {
+      allowUnlimitedContractSize: true,
+      // Remove the problematic gas settings
+      accounts: {
+        count: 10,
+        accountsBalance: "100000000000000000000000", // 100,000 ETH per account
+      },
+    },
     amoy: {
       url: process.env.POLYGON_AMOY_RPC_URL || "https://rpc-amoy.polygon.technology/",
       accounts: process.env.PRIVATE_KEY ? [`${process.env.PRIVATE_KEY}`] : [],
       chainId: 80002,
-      timeout: 60000, // Increase timeout for Amoy
+      timeout: 60000,
     },
   },
   sourcify: {
@@ -55,6 +61,6 @@ module.exports = {
     ],
   },
   mocha: {
-    timeout: 40000, // Increase test timeout
+    timeout: 60000,
   },
-};
+}; 

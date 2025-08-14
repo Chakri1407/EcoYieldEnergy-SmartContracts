@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EYE Token System - User & Admin Flows</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            background: #ffffff;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            border: none;
+            border-radius: 0;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid #333;
+        }
+
+        .header h1 {
+            font-size: 24px;
+            color: #333;
+            margin-bottom: 8px;
+        }
+
+        .header p {
+            font-size: 14px;
+            color: #666;
+        }
+
+        .flow-section {
+            margin-bottom: 30px;
+            page-break-inside: avoid;
+            break-inside: avoid;
+        }
+
+        .flow-title {
+            font-size: 18px;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 30px;
+            text-align: center;
+            padding: 10px;
+            background: #f5f5f5;
+            border: 1px solid #ddd;
+        }
+
+        .flow-diagram {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 25px;
+            padding: 15px;
+        }
+
+        .flow-row {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            justify-content: center;
+        }
+
+        .actor {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-width: 80px;
+        }
+
+        .stick-figure {
+            width: 50px;
+            height: 50px;
+            border: 2px solid #333;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: white;
+            font-size: 20px;
+            margin-bottom: 8px;
+            position: relative;
+        }
+
+        .stick-figure::after {
+            content: '';
+            position: absolute;
+            top: 45px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 2px;
+            height: 25px;
+            background: #333;
+        }
+
+        .stick-figure::before {
+            content: '';
+            position: absolute;
+            top: 60px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 30px;
+            height: 2px;
+            background: #333;
+        }
+
+        .actor-label {
+            font-size: 12px;
+            font-weight: bold;
+            color: #333;
+            text-align: center;
+            margin-top: 15px;
+        }
+
+        .process-box {
+            background: #ffffff;
+            border: 2px solid #333;
+            border-radius: 8px;
+            padding: 15px 20px;
+            min-width: 180px;
+            max-width: 220px;
+            text-align: center;
+            font-size: 12px;
+            color: #333;
+            font-weight: 500;
+            margin: 10px;
+        }
+
+        .decision-box {
+            background: #ffffff;
+            border: 2px solid #333;
+            border-radius: 0;
+            padding: 12px 16px;
+            min-width: 160px;
+            max-width: 180px;
+            text-align: center;
+            font-size: 11px;
+            color: #333;
+            font-weight: 500;
+            transform: rotate(45deg);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 90px;
+            width: 160px;
+            margin: 15px;
+        }
+
+        .decision-text {
+            transform: rotate(-45deg);
+            text-align: center;
+        }
+
+        .system-box {
+            background: #f0f8ff;
+            border: 2px solid #4169e1;
+            border-radius: 8px;
+            padding: 15px 20px;
+            min-width: 180px;
+            max-width: 220px;
+            text-align: center;
+            font-size: 12px;
+            color: #333;
+            font-weight: 500;
+            margin: 10px;
+        }
+
+        .success-box {
+            background: #f0fff0;
+            border: 2px solid #32cd32;
+            border-radius: 8px;
+            padding: 15px 20px;
+            min-width: 180px;
+            max-width: 220px;
+            text-align: center;
+            font-size: 12px;
+            color: #333;
+            font-weight: 500;
+            margin: 10px;
+        }
+
+        .error-box {
+            background: #fff0f0;
+            border: 2px solid #ff4444;
+            border-radius: 8px;
+            padding: 15px 20px;
+            min-width: 180px;
+            max-width: 220px;
+            text-align: center;
+            font-size: 12px;
+            color: #333;
+            font-weight: 500;
+            margin: 10px;
+        }
+
+        .arrow-down {
+            width: 0;
+            height: 0;
+            border-left: 10px solid transparent;
+            border-right: 10px solid transparent;
+            border-top: 15px solid #333;
+        }
+
+        .arrow-right {
+            width: 0;
+            height: 0;
+            border-top: 10px solid transparent;
+            border-bottom: 10px solid transparent;
+            border-left: 15px solid #333;
+        }
+
+        .branch-container {
+            display: flex;
+            gap: 40px;
+            justify-content: center;
+            margin: 25px 0;
+            padding: 15px;
+            page-break-inside: avoid;
+        }
+
+        .branch-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+            padding: 10px;
+            min-width: 200px;
+        }
+
+        .branch-label {
+            font-size: 11px;
+            font-weight: bold;
+            color: #666;
+            background: #f5f5f5;
+            padding: 4px 8px;
+            border-radius: 4px;
+            border: 1px solid #ccc;
+        }
+
+        .payment-options {
+            display: flex;
+            gap: 30px;
+            justify-content: center;
+            margin: 30px 0;
+            flex-wrap: wrap;
+        }
+
+        .payment-box {
+            background: #fff8dc;
+            border: 2px solid #daa520;
+            border-radius: 8px;
+            padding: 10px 14px;
+            text-align: center;
+            font-size: 11px;
+            color: #333;
+            font-weight: 500;
+            min-width: 80px;
+        }
+
+        .tier-info {
+            background: #f9f9f9;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            padding: 20px;
+            margin: 25px 0;
+            text-align: center;
+            page-break-inside: avoid;
+        }
+
+        .tier-info h4 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+
+        .tier-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .tier-item {
+            background: white;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            padding: 8px;
+            font-size: 10px;
+            text-align: center;
+        }
+
+        @media print {
+            body {
+                margin: 0;
+                padding: 10px;
+                background: white !important;
+            }
+            
+            .container {
+                box-shadow: none;
+                border: none;
+                max-width: 100%;
+                padding: 15px;
+            }
+            
+            .flow-section {
+                page-break-inside: avoid;
+                break-inside: avoid;
+                margin-bottom: 40px;
+            }
+            
+            .branch-container {
+                page-break-inside: avoid;
+                break-inside: avoid;
+            }
+            
+            .tier-info {
+                page-break-inside: avoid;
+                break-inside: avoid;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>EYE Token System - Flow Diagrams</h1>
+            <p>User Purchase Flow & Admin Management Flow</p>
+        </div>
+
+        <!-- User Purchase Flow -->
+        <div class="flow-section">
+            <div class="flow-title">User Purchase Flow</div>
+            
+            <div class="flow-diagram">
+                <!-- Start -->
+                <div class="actor">
+                    <div class="stick-figure">👤</div>
+                    <div class="actor-label">User</div>
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- Check Round -->
+                <div class="process-box">
+                    Check Current ICO Round
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- Tier Info Display -->
+                <div class="tier-info">
+                    <h4>ICO Round Pricing</h4>
+                    <div class="tier-grid">
+                        <div class="tier-item">
+                            <strong>Pre-Seed</strong><br>
+                            50M tokens<br>
+                            $0.04
+                        </div>
+                        <div class="tier-item">
+                            <strong>Seed</strong><br>
+                            125M tokens<br>
+                            $0.04
+                        </div>
+                        <div class="tier-item">
+                            <strong>Public</strong><br>
+                            50M tokens<br>
+                            $0.0500
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- Calculate Purchase -->
+                <div class="system-box">
+                    Calculate Tokens for<br>
+                    USD Amount<br>
+                    (Automatic Tier Pricing)
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- Check if PreSale -->
+                <div class="decision-box">
+                    <div class="decision-text">Pre-Seed<br>Round?</div>
+                </div>
+                
+                <div class="branch-container">
+                    <div class="branch-item">
+                        <div class="branch-label">YES</div>
+                        <div class="process-box">
+                            Verify Whitelist<br>
+                            (Merkle Proof)
+                        </div>
+                        <div class="arrow-down"></div>
+                        <div class="decision-box">
+                            <div class="decision-text">Whitelist<br>Valid?</div>
+                        </div>
+                        <div class="branch-container">
+                            <div class="branch-item">
+                                <div class="branch-label">YES</div>
+                                <div class="success-box">Proceed to Payment</div>
+                            </div>
+                            <div class="branch-item">
+                                <div class="branch-label">NO</div>
+                                <div class="error-box">Access Denied</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="branch-item">
+                        <div class="branch-label">NO</div>
+                        <div class="success-box">
+                            Seed/Public Round<br>
+                            No Whitelist Required
+                        </div>
+                        <div class="arrow-down"></div>
+                    </div>
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- Payment Method Selection -->
+                <div class="process-box">
+                    Select Payment Method
+                </div>
+                
+                <div class="payment-options">
+                    <div class="payment-box">
+                        💳<br>
+                        FIAT<br>
+                        (Credit Card)
+                    </div>
+                    <div class="payment-box">
+                        🪙<br>
+                        USDC<br>
+                        (Crypto)
+                    </div>
+                    <div class="payment-box">
+                        🪙<br>
+                        USDT<br>
+                        (Crypto)
+                    </div>
+                    <div class="payment-box">
+                        ⟠<br>
+                        ETH<br>
+                        (Crypto)
+                    </div>
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- Execute Payment -->
+                <div class="process-box">
+                    Execute Payment<br>
+                    (Fiat Gateway or<br>
+                    Crypto Transfer)
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <div class="system-box">
+                    Smart Contract<br>
+                    Processing<br>
+                    (Validation & Distribution)
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- Token Distribution -->
+                <div class="branch-container">
+                    <div class="branch-item">
+                        <div class="success-box">
+                            TGE Tokens<br>
+                            (Immediate Transfer)
+                        </div>
+                    </div>
+                    <div class="branch-item">
+                        <div class="system-box">
+                            Vesting Schedule<br>
+                            (Linear Release)
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- Vesting Claims -->
+                <div class="process-box">
+                    Ongoing Vesting Claims<br>
+                    (User can claim anytime<br>
+                    after cliff period)
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <div class="success-box">
+                    Purchase Complete<br>
+                    Tokens Received
+                </div>
+            </div>
+        </div>
+
+        <!-- Admin Management Flow -->
+        <div class="flow-section">
+            <div class="flow-title">Admin Management Flow</div>
+            
+            <div class="flow-diagram">
+                <!-- Start -->
+                <div class="actor">
+                    <div class="stick-figure">👑</div>
+                    <div class="actor-label">Admin</div>
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- Configure System -->
+                <div class="process-box">
+                    Configure ICO Parameters<br>
+                    (Pricing Tiers, Wallet Caps,<br>
+                    Vesting Schedules)
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- Set Whitelist -->
+                <div class="flow-row">
+                    <div class="process-box">
+                        Generate Pre-Seed<br>
+                        Whitelist<br>
+                        (Merkle Tree)
+                    </div>
+                    <div class="arrow-right"></div>
+                    <div class="system-box">
+                        Set Merkle Root<br>
+                        in Contract
+                    </div>
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- Activate PreSale -->
+                <div class="success-box">
+                    Activate Pre-Seed Round<br>
+                    (Round becomes active<br>
+                    for purchases)
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- Monitor Progress -->
+                <div class="process-box">
+                    Monitor ICO Progress<br>
+                    (Track sales, remaining tokens,<br>
+                    user purchases)
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- Round Management Decision -->
+                <div class="decision-box">
+                    <div class="decision-text">Round<br>Complete?</div>
+                </div>
+                
+                <div class="branch-container">
+                    <div class="branch-item">
+                        <div class="branch-label">YES</div>
+                        <div class="process-box">
+                            Close Current Round<br>
+                            & Activate Next<br>
+                            (Pre-Seed → Seed → Public)
+                        </div>
+                        <div class="arrow-down"></div>
+                        <div class="system-box">
+                            Update Round Status<br>
+                            & Configuration
+                        </div>
+                    </div>
+                    <div class="branch-item">
+                        <div class="branch-label">NO</div>
+                        <div class="process-box">
+                            Continue Monitoring<br>
+                            & Support Users
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- Post-ICO Management -->
+                <div class="process-box">
+                    Post-ICO Management<br>
+                    (Monitor vesting claims,<br>
+                    withdraw unsold tokens)
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- Emergency Controls -->
+                <div class="flow-row">
+                    <div class="error-box">
+                        Emergency Controls<br>
+                        (Pause system if needed,<br>
+                        emergency withdrawals)
+                    </div>
+                    <div class="arrow-right"></div>
+                    <div class="system-box">
+                        System Upgrades<br>
+                        (Future enhancements<br>
+                        via proxy pattern)
+                    </div>
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <div class="success-box">
+                    ICO Successfully<br>
+                    Managed & Completed
+                </div>
+            </div>
+        </div>
+
+        <!-- Collaborator Vesting Flow -->
+        <div class="flow-section">
+            <div class="flow-title">Collaborator Vesting Flow (Team, Advisors, Community, etc.)</div>
+            
+            <div class="flow-diagram">
+                <!-- Start -->
+                <div class="actor">
+                    <div class="stick-figure">👑</div>
+                    <div class="actor-label">Admin</div>
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- Collaborator Categories -->
+                <div class="tier-info">
+                    <h4>Vesting Buckets</h4>
+                    <div class="tier-grid">
+                        <div class="tier-item">
+                            <strong>Community</strong><br>
+                            150M tokens (15%)<br>
+                            36 months vesting
+                        </div>
+                        <div class="tier-item">
+                            <strong>Treasury</strong><br>
+                            225M tokens (22.5%)<br>
+                            36 months vesting
+                        </div>
+                        <div class="tier-item">
+                            <strong>Team</strong><br>
+                            100M tokens (10%)<br>
+                            24 months vesting
+                        </div>
+                    </div>
+                    <div class="tier-grid" style="margin-top: 10px;">
+                        <div class="tier-item">
+                            <strong>Advisors</strong><br>
+                            50M tokens (5%)<br>
+                            24 months vesting
+                        </div>
+                        <div class="tier-item">
+                            <strong>Liquidity</strong><br>
+                            100M tokens (10%)<br>
+                            No vesting
+                        </div>
+                        <div class="tier-item">
+                            <strong>Staking</strong><br>
+                            100M tokens (10%)<br>
+                            36 months vesting
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- Add Collaborators -->
+                <div class="process-box">
+                    Add Collaborators<br>
+                    to Vesting Buckets<br>
+                    (Specify addresses & amounts)
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- Create Vesting -->
+                <div class="system-box">
+                    Create Vesting Schedules<br>
+                    (Based on bucket parameters:<br>
+                    cliff periods & durations)
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- Vesting Types -->
+                <div class="branch-container">
+                    <div class="branch-item">
+                        <div class="system-box">
+                            Team/Advisors<br>
+                            9-month cliff<br>
+                            24-month linear
+                        </div>
+                    </div>
+                    <div class="branch-item">
+                        <div class="system-box">
+                            Community/Treasury<br>
+                            12-month cliff<br>
+                            36-month linear
+                        </div>
+                    </div>
+                    <div class="branch-item">
+                        <div class="success-box">
+                            Liquidity<br>
+                            No cliff<br>
+                            Immediate release
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- Collaborator Claims -->
+                <div class="actor">
+                    <div class="stick-figure">👥</div>
+                    <div class="actor-label">Collaborators</div>
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <div class="process-box">
+                    Collaborators Claim<br>
+                    Vested Tokens<br>
+                    (After cliff period ends)
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <div class="success-box">
+                    Linear Token Release<br>
+                    Over Vesting Period
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html> 

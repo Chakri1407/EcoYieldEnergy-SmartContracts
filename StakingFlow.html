@@ -1,0 +1,780 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EcoYield Staking System - Architecture & User Flows</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            background: #ffffff;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            border: none;
+            border-radius: 0;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid #333;
+        }
+
+        .header h1 {
+            font-size: 24px;
+            color: #333;
+            margin-bottom: 8px;
+        }
+
+        .header p {
+            font-size: 14px;
+            color: #666;
+        }
+
+        .flow-section {
+            margin-bottom: 30px;
+            page-break-inside: avoid;
+            break-inside: avoid;
+        }
+
+        .flow-title {
+            font-size: 18px;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 30px;
+            text-align: center;
+            padding: 10px;
+            background: #f5f5f5;
+            border: 1px solid #ddd;
+        }
+
+        .flow-diagram {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 25px;
+            padding: 15px;
+        }
+
+        .flow-row {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .actor {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-width: 80px;
+        }
+
+        .stick-figure {
+            width: 50px;
+            height: 50px;
+            border: 2px solid #333;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: white;
+            font-size: 20px;
+            margin-bottom: 8px;
+            position: relative;
+        }
+
+        .stick-figure::after {
+            content: '';
+            position: absolute;
+            top: 45px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 2px;
+            height: 25px;
+            background: #333;
+        }
+
+        .stick-figure::before {
+            content: '';
+            position: absolute;
+            top: 60px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 30px;
+            height: 2px;
+            background: #333;
+        }
+
+        .actor-label {
+            font-size: 12px;
+            font-weight: bold;
+            color: #333;
+            text-align: center;
+            margin-top: 15px;
+        }
+
+        .process-box {
+            background: #ffffff;
+            border: 2px solid #333;
+            border-radius: 8px;
+            padding: 15px 20px;
+            min-width: 180px;
+            max-width: 220px;
+            text-align: center;
+            font-size: 12px;
+            color: #333;
+            font-weight: 500;
+            margin: 10px;
+        }
+
+        .decision-box {
+            background: #ffffff;
+            border: 2px solid #333;
+            border-radius: 0;
+            padding: 12px 16px;
+            min-width: 160px;
+            max-width: 180px;
+            text-align: center;
+            font-size: 11px;
+            color: #333;
+            font-weight: 500;
+            transform: rotate(45deg);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 90px;
+            width: 160px;
+            margin: 15px;
+        }
+
+        .decision-text {
+            transform: rotate(-45deg);
+            text-align: center;
+        }
+
+        .system-box {
+            background: #f0f8ff;
+            border: 2px solid #4169e1;
+            border-radius: 8px;
+            padding: 15px 20px;
+            min-width: 180px;
+            max-width: 220px;
+            text-align: center;
+            font-size: 12px;
+            color: #333;
+            font-weight: 500;
+            margin: 10px;
+        }
+
+        .success-box {
+            background: #f0fff0;
+            border: 2px solid #32cd32;
+            border-radius: 8px;
+            padding: 15px 20px;
+            min-width: 180px;
+            max-width: 220px;
+            text-align: center;
+            font-size: 12px;
+            color: #333;
+            font-weight: 500;
+            margin: 10px;
+        }
+
+        .error-box {
+            background: #fff0f0;
+            border: 2px solid #ff4444;
+            border-radius: 8px;
+            padding: 15px 20px;
+            min-width: 180px;
+            max-width: 220px;
+            text-align: center;
+            font-size: 12px;
+            color: #333;
+            font-weight: 500;
+            margin: 10px;
+        }
+
+        .staking-box {
+            background: #fff5ee;
+            border: 2px solid #ff8c00;
+            border-radius: 8px;
+            padding: 15px 20px;
+            min-width: 180px;
+            max-width: 220px;
+            text-align: center;
+            font-size: 12px;
+            color: #333;
+            font-weight: 500;
+            margin: 10px;
+        }
+
+        .lp-box {
+            background: #f5f0ff;
+            border: 2px solid #9370db;
+            border-radius: 8px;
+            padding: 15px 20px;
+            min-width: 180px;
+            max-width: 220px;
+            text-align: center;
+            font-size: 12px;
+            color: #333;
+            font-weight: 500;
+            margin: 10px;
+        }
+
+        .arrow-down {
+            width: 0;
+            height: 0;
+            border-left: 10px solid transparent;
+            border-right: 10px solid transparent;
+            border-top: 15px solid #333;
+        }
+
+        .arrow-right {
+            width: 0;
+            height: 0;
+            border-top: 10px solid transparent;
+            border-bottom: 10px solid transparent;
+            border-left: 15px solid #333;
+        }
+
+        .branch-container {
+            display: flex;
+            gap: 40px;
+            justify-content: center;
+            margin: 25px 0;
+            padding: 15px;
+            page-break-inside: avoid;
+            flex-wrap: wrap;
+        }
+
+        .branch-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+            padding: 10px;
+            min-width: 200px;
+        }
+
+        .branch-label {
+            font-size: 11px;
+            font-weight: bold;
+            color: #666;
+            background: #f5f5f5;
+            padding: 4px 8px;
+            border-radius: 4px;
+            border: 1px solid #ccc;
+        }
+
+        .tier-info {
+            background: #f9f9f9;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            padding: 20px;
+            margin: 25px 0;
+            text-align: center;
+            page-break-inside: avoid;
+        }
+
+        .tier-info h4 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+
+        .tier-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .tier-item {
+            background: white;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            padding: 8px;
+            font-size: 10px;
+            text-align: center;
+        }
+
+        .formula-box {
+            background: #fffacd;
+            border: 2px solid #daa520;
+            border-radius: 8px;
+            padding: 15px 20px;
+            margin: 20px 0;
+            text-align: center;
+            font-family: monospace;
+            font-size: 11px;
+            color: #333;
+        }
+
+        @media print {
+            body {
+                margin: 0;
+                padding: 10px;
+                background: white !important;
+            }
+            
+            .container {
+                box-shadow: none;
+                border: none;
+                max-width: 100%;
+                padding: 15px;
+            }
+            
+            .flow-section {
+                page-break-inside: avoid;
+                break-inside: avoid;
+                margin-bottom: 40px;
+            }
+            
+            .branch-container {
+                page-break-inside: avoid;
+                break-inside: avoid;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>EcoYield Staking System Architecture</h1>
+            <p>User Staking Flow, Score Calculation & Reward Distribution</p>
+        </div>
+
+        <!-- System Overview -->
+        <div class="flow-section">
+            <div class="flow-title">System Architecture Overview</div>
+            
+            <div class="tier-info">
+                <h4>Key Components</h4>
+                <div class="tier-grid">
+                    <div class="tier-item">
+                        <strong>$EYE Token</strong><br>
+                        ERC-20 Governance Token<br>
+                        Stakeable for rewards
+                    </div>
+                    <div class="tier-item">
+                        <strong>LP Tokens</strong><br>
+                        ERC-3643 Project Tokens<br>
+                        Proof of investment
+                    </div>
+                    <div class="tier-item">
+                        <strong>Staking Contract</strong><br>
+                        UUPS Upgradeable<br>
+                        Score calculation & rewards
+                    </div>
+                    <div class="tier-item">
+                        <strong>Lock Periods</strong><br>
+                        1M(1x), 3M(1.5x)<br>
+                        6M(2.5x), 12M(4x)
+                    </div>
+                </div>
+            </div>
+
+            <div class="formula-box">
+                <strong>Core Formula:</strong><br>
+                Stake Score = LP_Balance^0.55 × EYE_Power^0.45<br>
+                EYE Power = Staked_EYE × Lock_Multiplier<br>
+                Ratio Check: 5% ≤ (EYE_Power / LP_Balance) ≤ 100%
+            </div>
+        </div>
+
+        <!-- User Staking Flow -->
+        <div class="flow-section">
+            <div class="flow-title">User Staking Flow</div>
+            
+            <div class="flow-diagram">
+                <!-- Start -->
+                <div class="actor">
+                    <div class="stick-figure">👤</div>
+                    <div class="actor-label">LP User</div>
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- Check LP Investment -->
+                <div class="lp-box">
+                    User Invests in Projects<br>
+                    (Receives ERC-3643 LP Tokens<br>
+                    from solar/energy projects)
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- Acquire EYE Tokens -->
+                <div class="staking-box">
+                    Acquire $EYE Tokens<br>
+                    (From market or protocol rewards)
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- Select Lock Period -->
+                <div class="process-box">
+                    Select Lock Period<br>
+                    & EYE Amount to Stake
+                </div>
+                
+                <div class="tier-info">
+                    <h4>Lock Period Options</h4>
+                    <div class="tier-grid">
+                        <div class="tier-item">
+                            <strong>1 Month</strong><br>
+                            1.0x Multiplier<br>
+                            Low commitment
+                        </div>
+                        <div class="tier-item">
+                            <strong>3 Months</strong><br>
+                            1.5x Multiplier<br>
+                            Medium commitment
+                        </div>
+                        <div class="tier-item">
+                            <strong>6 Months</strong><br>
+                            2.5x Multiplier<br>
+                            High commitment
+                        </div>
+                        <div class="tier-item">
+                            <strong>12 Months</strong><br>
+                            4.0x Multiplier<br>
+                            Maximum rewards
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- Execute Stake -->
+                <div class="system-box">
+                    Execute Stake Transaction<br>
+                    (Transfer EYE to contract<br>
+                    & create stake record)
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- Calculate Score -->
+                <div class="system-box">
+                    Calculate Stake Score<br>
+                    (LP Balance × EYE Power<br>
+                    with ratio validation)
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- Ratio Check -->
+                <div class="decision-box">
+                    <div class="decision-text">Ratio ≥ 5%<br>& ≤ 100%?</div>
+                </div>
+                
+                <div class="branch-container">
+                    <div class="branch-item">
+                        <div class="branch-label">YES</div>
+                        <div class="success-box">
+                            Eligible for Rewards<br>
+                            & Premium Access
+                        </div>
+                    </div>
+                    <div class="branch-item">
+                        <div class="branch-label">NO</div>
+                        <div class="error-box">
+                            Not Eligible<br>
+                            (Score = 0)
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Reward Distribution Flow -->
+        <div class="flow-section">
+            <div class="flow-title">Monthly Reward Distribution Flow</div>
+            
+            <div class="flow-diagram">
+                <!-- Start -->
+                <div class="actor">
+                    <div class="stick-figure">🤖</div>
+                    <div class="actor-label">Protocol</div>
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- Collect Performance Fees -->
+                <div class="system-box">
+                    Collect Performance Fees<br>
+                    from PPA Cash Flows<br>
+                    (2.5% funding + yield skim)
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- Fee Distribution -->
+                <div class="branch-container">
+                    <div class="branch-item">
+                        <div class="staking-box">
+                            50% → $EYE Buybacks<br>
+                            (Market purchases for<br>
+                            reward distribution)
+                        </div>
+                    </div>
+                    <div class="branch-item">
+                        <div class="system-box">
+                            50% → Protocol Treasury<br>
+                            (Operational reserves)
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- Calculate Reward Pool -->
+                <div class="system-box">
+                    Calculate Monthly Reward Pool<br>
+                    = $EYE Emissions + Buybacks<br>
+                    (10% of total over 48 months)
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- Pro-Rata Distribution -->
+                <div class="process-box">
+                    Distribute Pro-Rata<br>
+                    Based on Stake Scores<br>
+                    Reward = (User Score ÷ Total Scores) × Pool
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- User Claims -->
+                <div class="actor">
+                    <div class="stick-figure">👤</div>
+                    <div class="actor-label">Users</div>
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <div class="success-box">
+                    Users Claim Rewards<br>
+                    Anytime After Distribution
+                </div>
+            </div>
+        </div>
+
+        <!-- Premium Access Flow -->
+        <div class="flow-section">
+            <div class="flow-title">Premium Project Access Flow</div>
+            
+            <div class="flow-diagram">
+                <!-- New Project Launch -->
+                <div class="system-box">
+                    New Solar Project<br>
+                    Ready for Funding<br>
+                    (PPA opportunity available)
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- Two-Stage Sale -->
+                <div class="branch-container">
+                    <div class="branch-item">
+                        <div class="branch-label">STAGE 1 - Premium Pool (50%)</div>
+                        <div class="success-box">
+                            Existing LP/Stakers Only<br>
+                            Access based on Stake Score<br>
+                            Pro-rata allocation
+                        </div>
+                        <div class="arrow-down"></div>
+                        <div class="process-box">
+                            Allocation = Score_i ÷ Total_Scores<br>
+                            × Premium Pool Size
+                        </div>
+                    </div>
+                    <div class="branch-item">
+                        <div class="branch-label">STAGE 2 - Public Pool (50%)</div>
+                        <div class="process-box">
+                            Open to Everyone<br>
+                            (Including existing LPs)<br>
+                            Equal treatment
+                        </div>
+                        <div class="arrow-down"></div>
+                        <div class="success-box">
+                            New LPs Can Join<br>
+                            Pro-rata by USDC amount
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- Funding Complete -->
+                <div class="success-box">
+                    Project Fully Funded<br>
+                    LP Tokens Distributed<br>
+                    Yield Generation Begins
+                </div>
+            </div>
+        </div>
+
+        <!-- Admin Management Flow -->
+        <div class="flow-section">
+            <div class="flow-title">Admin Management & Governance Flow</div>
+            
+            <div class="flow-diagram">
+                <!-- Start -->
+                <div class="actor">
+                    <div class="stick-figure">👑</div>
+                    <div class="actor-label">Admin/Owner</div>
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- Configuration -->
+                <div class="flow-row">
+                    <div class="process-box">
+                        Configure Lock<br>
+                        Multipliers<br>
+                        (1x to 4x)
+                    </div>
+                    <div class="process-box">
+                        Update Scoring<br>
+                        Exponents<br>
+                        (LP: 0.55, EYE: 0.45)
+                    </div>
+                    <div class="process-box">
+                        Set Distribution<br>
+                        Interval<br>
+                        (30 days default)
+                    </div>
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- LP Token Management -->
+                <div class="system-box">
+                    Register New LP Tokens<br>
+                    (For each new solar project<br>
+                    with ERC-3643 compliance)
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- Protocol Operations -->
+                <div class="branch-container">
+                    <div class="branch-item">
+                        <div class="staking-box">
+                            Add Buyback Rewards<br>
+                            (From protocol fees<br>
+                            to reward pool)
+                        </div>
+                    </div>
+                    <div class="branch-item">
+                        <div class="process-box">
+                            Authorize Protocol<br>
+                            Callers<br>
+                            (Fee collection bots)
+                        </div>
+                    </div>
+                    <div class="branch-item">
+                        <div class="error-box">
+                            Emergency Controls<br>
+                            (Pause system<br>
+                            if needed)
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <!-- Contract Upgrades -->
+                <div class="system-box">
+                    UUPS Proxy Upgrades<br>
+                    (Deploy new logic<br>
+                    while preserving state)
+                </div>
+                
+                <div class="arrow-down"></div>
+                
+                <div class="success-box">
+                    System Successfully<br>
+                    Managed & Upgraded
+                </div>
+            </div>
+        </div>
+
+        <!-- Technical Architecture -->
+        <div class="flow-section">
+            <div class="flow-title">Technical Architecture Components</div>
+            
+            <div class="tier-info">
+                <h4>Smart Contract Structure</h4>
+                <div class="tier-grid">
+                    <div class="tier-item">
+                        <strong>EcoYieldStaking</strong><br>
+                        Main upgradeable contract<br>
+                        UUPS proxy pattern
+                    </div>
+                    <div class="tier-item">
+                        <strong>IERC20 (EYE)</strong><br>
+                        Governance token interface<br>
+                        Standard ERC-20
+                    </div>
+                    <div class="tier-item">
+                        <strong>IERC20 (LP Tokens)</strong><br>
+                        Project investment tokens<br>
+                        ERC-3643 compliant
+                    </div>
+                    <div class="tier-item">
+                        <strong>OpenZeppelin Imports</strong><br>
+                        Security & upgradeability<br>
+                        Battle-tested libraries
+                    </div>
+                </div>
+            </div>
+            
+            <div class="tier-info">
+                <h4>Key Storage Variables</h4>
+                <div class="tier-grid">
+                    <div class="tier-item">
+                        <strong>userStakes</strong><br>
+                        Individual stake records<br>
+                        Amount, lock, multiplier
+                    </div>
+                    <div class="tier-item">
+                        <strong>userStakeScores</strong><br>
+                        Calculated user scores<br>
+                        For rewards & access
+                    </div>
+                    <div class="tier-item">
+                        <strong>lpTokens</strong><br>
+                        Project LP token registry<br>
+                        Per project mapping
+                    </div>
+                    <div class="tier-item">
+                        <strong>lockMultipliers</strong><br>
+                        Time-based multipliers<br>
+                        Governance configurable
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html> 
